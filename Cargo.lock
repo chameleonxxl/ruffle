@@ -323,6 +323,12 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "base64"
+version = "0.21.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
+
+[[package]]
+name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
@@ -2505,7 +2511,7 @@ version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "727805d60e7938b76b826a6ef209eb70eaa1812794f9424d4a4e2d740662df5f"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "futures-channel",
  "futures-core",
@@ -4018,7 +4024,7 @@ version = "1.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "546b279bf0638ee811d9e47de2ca5b66575a543035d79fdf83959dd2f5c3b4c3"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "indexmap",
  "quick-xml",
  "serde",
@@ -4447,7 +4453,7 @@ version = "0.12.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "cookie",
  "cookie_store",
@@ -4564,6 +4570,7 @@ name = "ruffle_core"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "base64 0.21.7",
  "bitflags 2.11.0",
  "bitstream-io",
  "build_playerglobal",
@@ -4592,6 +4599,7 @@ dependencies = [
  "indexmap",
  "itertools 0.14.0",
  "jpegxr",
+ "js-sys",
  "linkme",
  "lzma-rs",
  "naga-agal",
@@ -4599,6 +4607,7 @@ dependencies = [
  "num-bigint",
  "num-derive",
  "num-traits",
+ "once_cell",
  "percent-encoding",
  "png",
  "quick-xml",
@@ -4623,6 +4632,7 @@ dependencies = [
  "ttf-parser",
  "unicode-segmentation",
  "url",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
  "weak-table",
  "web-time",
@@ -4926,7 +4936,7 @@ name = "ruffle_web"
 version = "0.1.0"
 dependencies = [
  "async-channel",
- "base64",
+ "base64 0.22.1",
  "chrono",
  "console_error_panic_hook",
  "futures",
