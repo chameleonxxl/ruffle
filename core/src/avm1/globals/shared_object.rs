@@ -10,6 +10,7 @@ use gc_arena::{Collect, Gc};
 use ruffle_macros::istr;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 #[derive(Default, Clone, Collect)]
 #[collect(require_static)]
@@ -86,8 +87,19 @@ pub fn serialize<'gc>(activation: &mut Activation<'_, 'gc>, value: Value<'gc>) -
         Value::Number(number) => AmfValue::Number(number),
         Value::String(string) => AmfValue::String(string.to_string()),
         Value::Object(object) => {
-            let lso = new_lso(activation, "root", object);
-            AmfValue::Object(ObjectId::INVALID, lso.into_iter().collect(), None)
+            if let NativeObject::Array(_) = object.native() {
+                // Serialize arrays as StrictArray so Java/server sees them as List/Array
+                let length = object.length(activation).unwrap_or(0);
+                let mut elements = Vec::new();
+                for i in 0..length {
+                    let element = object.get_element(activation, i);
+                    elements.push(Rc::new(serialize(activation, element)));
+                }
+                AmfValue::StrictArray(ObjectId::INVALID, elements)
+            } else {
+                let lso = new_lso(activation, "root", object);
+                AmfValue::Object(ObjectId::INVALID, lso.into_iter().collect(), None)
+            }
         }
         Value::MovieClip(_) => AmfValue::Undefined,
     }
@@ -198,14 +210,44 @@ pub fn deserialize_value<'gc>(
                 Value::Undefined
             }
         }
-        AmfValue::Object(_, elements, _) => {
-            // Deserialize Object
-            let obj = Object::new(
-                &activation.context.strings,
-                Some(activation.prototypes().object),
-            );
-
-            let v: Value<'gc> = obj.into();
+        AmfValue::Object(_, elements, class_def) => {
+            // If a class name is registered via Object.registerClass, call the constructor
+            // to initialize internal state, then set AMF properties on top.
+            // This matches real Flash behavior where AMF deserialization creates a proper
+            // class instance before populating properties.
+            let (v, obj) = if let Some(cd) = class_def.as_ref() {
+                let class_name = AvmString::new_utf8(activation.gc(), &cd.name);
+                let swf_version = activation.swf_version();
+                if let Some(constructor) = activation.context.avm1.get_registered_constructor(swf_version, class_name) {
+                    // Call the constructor to create a proper instance with initialized state
+                    if let Ok(Value::Object(obj)) = constructor.construct(activation, &[]) {
+                        (obj.into(), obj)
+                    } else {
+                        // Constructor failed, fall back to plain object with prototype
+                        let proto = constructor
+                            .get(istr!("prototype"), activation)
+                            .ok()
+                            .and_then(|v| v.as_object(activation));
+                        let obj = Object::new(
+                            &activation.context.strings,
+                            Some(proto.unwrap_or(activation.prototypes().object)),
+                        );
+                        (obj.into(), obj)
+                    }
+                } else {
+                    let obj = Object::new(
+                        &activation.context.strings,
+                        Some(activation.prototypes().object),
+                    );
+                    (obj.into(), obj)
+                }
+            } else {
+                let obj = Object::new(
+                    &activation.context.strings,
+                    Some(activation.prototypes().object),
+                );
+                (obj.into(), obj)
+            };
 
             // This should always be valid, but lets be sure
             if let Some(reference) = lso.as_reference(val) {
@@ -241,13 +283,94 @@ pub fn deserialize_value<'gc>(
                 Value::Undefined
             }
         }
+        AmfValue::StrictArray(_, elements) => {
+            let array_constructor = activation.prototypes().array_constructor;
+            if let Ok(Value::Object(obj)) =
+                array_constructor.construct(activation, &[(elements.len() as f64).into()])
+            {
+                let v: Value<'gc> = obj.into();
+
+                if let Some(reference) = lso.as_reference(val) {
+                    reference_cache.insert(reference, v);
+                }
+
+                for (i, element) in elements.iter().enumerate() {
+                    let value = deserialize_value(activation, element, lso, reference_cache);
+                    obj.set_element(activation, i as i32, value).unwrap();
+                }
+
+                v
+            } else {
+                Value::Undefined
+            }
+        }
+        AmfValue::Integer(i) => (*i as f64).into(),
+        AmfValue::AMF3(inner) => {
+            deserialize_value(activation, inner, lso, reference_cache)
+        }
+        AmfValue::Custom(custom_elements, elements, class_def) => {
+            // Call constructor for registered classes, same as AmfValue::Object
+            let (v, obj) = if let Some(cd) = class_def.as_ref() {
+                let class_name = AvmString::new_utf8(activation.gc(), &cd.name);
+                let swf_version = activation.swf_version();
+                if let Some(constructor) = activation.context.avm1.get_registered_constructor(swf_version, class_name) {
+                    if let Ok(Value::Object(obj)) = constructor.construct(activation, &[]) {
+                        (obj.into(), obj)
+                    } else {
+                        let proto = constructor
+                            .get(istr!("prototype"), activation)
+                            .ok()
+                            .and_then(|v| v.as_object(activation));
+                        let obj = Object::new(
+                            &activation.context.strings,
+                            Some(proto.unwrap_or(activation.prototypes().object)),
+                        );
+                        (obj.into(), obj)
+                    }
+                } else {
+                    let obj = Object::new(
+                        &activation.context.strings,
+                        Some(activation.prototypes().object),
+                    );
+                    (obj.into(), obj)
+                }
+            } else {
+                let obj = Object::new(
+                    &activation.context.strings,
+                    Some(activation.prototypes().object),
+                );
+                (obj.into(), obj)
+            };
+
+            if let Some(reference) = lso.as_reference(val) {
+                reference_cache.insert(reference, v);
+            }
+
+            // Set class name if available
+            if let Some(cd) = class_def {
+                let name = AvmString::new_utf8(activation.gc(), &cd.name);
+                let class_key = AvmString::new_utf8(activation.gc(), "__className");
+                obj.define_value(activation.gc(), class_key, Value::String(name), Attribute::empty());
+            }
+
+            for entry in custom_elements.iter().chain(elements.iter()) {
+                let value = deserialize_value(activation, entry.value(), lso, reference_cache);
+                let name = AvmString::new_utf8(activation.gc(), &entry.name);
+                obj.define_value(activation.gc(), name, value, Attribute::empty());
+            }
+
+            v
+        }
         AmfValue::Reference(x) => {
             // This should always be a valid reference, but a "bad" file could create an invalid one
             // In that case we will just assume undefined
             let val = reference_cache.get(x).unwrap_or(&Value::Undefined);
             *val
         }
-        _ => Value::Undefined,
+        other => {
+            tracing::warn!("deserialize_value: unhandled AMF type: {:?}", std::mem::discriminant(other));
+            Value::Undefined
+        }
     }
 }
 

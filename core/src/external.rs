@@ -1,5 +1,6 @@
 use crate::avm1::NativeObject;
 use crate::avm1::Value as Avm1Value;
+use crate::avm1::ExecutionReason;
 use crate::avm1::{Activation as Avm1Activation, ActivationIdentifier as Avm1ActivationIdentifier};
 use crate::avm1::{ArrayBuilder as Avm1ArrayBuilder, Error as Avm1Error, Object as Avm1Object};
 use crate::avm2::activation::Activation as Avm2Activation;
@@ -126,29 +127,104 @@ impl Value {
         activation: &mut Avm1Activation<'_, 'gc>,
         value: Avm1Value<'gc>,
     ) -> Result<Value, Avm1Error<'gc>> {
+        Self::from_avm1_with_depth(activation, value, 0)
+    }
+
+    fn from_avm1_with_depth<'gc>(
+        activation: &mut Avm1Activation<'_, 'gc>,
+        value: Avm1Value<'gc>,
+        depth: u8,
+    ) -> Result<Value, Avm1Error<'gc>> {
+        // Prevent infinite recursion in object conversion
+        // This specifically handles circular references like sBaseURI/sBaseUri
+        if depth > 10 {
+            return Ok(Value::Null);
+        }
+
         Ok(match value {
             Avm1Value::Undefined => Value::Undefined,
             Avm1Value::Null => Value::Null,
             Avm1Value::Bool(value) => value.into(),
             Avm1Value::Number(value) => value.into(),
             Avm1Value::String(value) => Value::String(value.to_string()),
-            Avm1Value::MovieClip(_) => Value::Null,
+            Avm1Value::MovieClip(mcr) => {
+                // Only coerce MovieClip at top level (depth 0) to avoid recursive serialization
+                // of massive object trees when MovieClips appear as nested properties
+                if depth == 0 {
+                    match mcr.coerce_to_object(activation) {
+                        Some(object) => {
+                            return Self::from_avm1_with_depth(activation, Avm1Value::Object(object), depth);
+                        }
+                        None => Value::Null,
+                    }
+                } else {
+                    Value::Null
+                }
+            }
             Avm1Value::Object(object) if matches!(object.native(), NativeObject::Array(_)) => {
                 let length = object.length(activation)?;
                 let values: Result<Vec<_>, Avm1Error<'gc>> = (0..length)
                     .map(|i| {
                         let element = object.get_element(activation, i);
-                        Value::from_avm1(activation, element)
+                        Value::from_avm1_with_depth(activation, element, depth + 1)
                     })
                     .collect();
                 Value::List(values?)
             }
             Avm1Value::Object(object) => {
+                // Special handling for Date objects
+                if let NativeObject::Date(date_ref) = object.native() {
+                    let date_ms = date_ref.get().time();
+                    let mut values = BTreeMap::new();
+                    values.insert("#type".to_string(), Value::String("Date".to_string()));
+                    values.insert("time".to_string(), Value::Number(date_ms));
+                    // Call toString() on the Date for Lingo compatibility
+                    if let Ok(to_string_result) = object.call_method(
+                        AvmString::new_utf8(activation.gc(), "toString"),
+                        &[],
+                        activation,
+                        ExecutionReason::FunctionCall,
+                    ) {
+                        if let Avm1Value::String(s) = to_string_result {
+                            values.insert("toString".to_string(), Value::String(s.to_string()));
+                        }
+                    }
+                    return Ok(Value::Object(values));
+                }
+
                 let keys = object.get_keys(activation, false);
                 let mut values = BTreeMap::new();
+
+                // Detect typed objects via getTypeOf()
+                if let Ok(type_val) = object.call_method(
+                    AvmString::new_utf8(activation.gc(), "getTypeOf"),
+                    &[],
+                    activation,
+                    ExecutionReason::FunctionCall,
+                ) {
+                    if let Avm1Value::String(s) = type_val {
+                        values.insert("#type".to_string(), Value::String(s.to_string()));
+                    }
+                }
+
                 for key in keys {
-                    let value = object.get(key, activation)?;
-                    values.insert(key.to_string(), Value::from_avm1(activation, value)?);
+                    match object.get(key, activation) {
+                        Ok(value) => {
+                            match Value::from_avm1_with_depth(activation, value, depth + 1) {
+                                Ok(converted_value) => {
+                                    values.insert(key.to_string(), converted_value);
+                                }
+                                Err(_) => {
+                                    // Skip properties that cause recursion errors
+                                    values.insert(key.to_string(), Value::Null);
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // Skip properties that can't be accessed
+                            values.insert(key.to_string(), Value::Null);
+                        }
+                    }
                 }
                 Value::Object(values)
             }
