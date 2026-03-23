@@ -113,6 +113,14 @@ async function fetchRuffle(
 
     await init({ module_or_path: response });
 
+    const { ruffleRegisterLingoCallback } = await (extensionsSupported
+        ? import("../dist/ruffle_web")
+        : // @ts-expect-error TS2307 TypeScript compiler is trying to do the import.
+          import("../dist/%FALLBACK_WASM%"));
+
+    (window as any).ruffleRegisterLingoCallback = ruffleRegisterLingoCallback;
+    console.log("✅ ruffleRegisterLingoCallback exposed globally.");
+
     return [RuffleInstanceBuilder, ZipWriter];
 }
 

@@ -73,3 +73,21 @@ pub const NEWEST_PLAYER_VERSION: u8 = 51;
 
 /// The default Flash Player version that Ruffle will emulate.
 pub const DEFAULT_PLAYER_VERSION: u8 = 32;
+
+use once_cell::sync::Lazy;
+use std::sync::Mutex;
+
+#[derive(Debug, Clone)]
+pub struct LingoCallback {
+    pub movie_clip_path: String,
+    pub method_name: String,
+    pub lingo_cast_lib: i32,
+    pub lingo_cast_member: i32,
+    pub lingo_handler: String,
+    pub flash_cast_lib: i32,
+    pub flash_cast_member: i32,
+}
+
+// Global store for all registered callbacks
+pub static LINGO_CALLBACKS: Lazy<Mutex<Vec<LingoCallback>>> =
+    Lazy::new(|| Mutex::new(Vec::new()));

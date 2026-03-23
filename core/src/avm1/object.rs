@@ -42,6 +42,79 @@ pub mod super_object;
 
 pub use script_object::{Object, ObjectHandle, ObjectWeak};
 
+use js_sys::{Reflect, Array};
+use crate::LingoCallback;
+use crate::LINGO_CALLBACKS;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsValue;
+use base64::{Engine};
+use js_sys::JSON;
+
+use crate::external::Value as ExternalValue;
+
+pub fn external_to_js_value(external: ExternalValue) -> JsValue {
+    match external {
+        ExternalValue::Undefined => JsValue::UNDEFINED,
+        ExternalValue::Null => JsValue::NULL,
+        ExternalValue::Bool(value) => JsValue::from_bool(value),
+        ExternalValue::Number(value) => JsValue::from_f64(value),
+        ExternalValue::String(value) => JsValue::from_str(&value),
+        ExternalValue::Object(map) => {
+            // Detect Denizen type
+            let is_denizen = map.get("#type").map_or(false, |v| match v {
+                ExternalValue::String(s) => s == "Denizen",
+                _ => false,
+            });
+
+            // Create JS object
+            let js_obj = if is_denizen {
+                let ctor = js_sys::Reflect::get(
+                    &js_sys::global(),
+                    &JsValue::from_str("Denizen")
+                )
+                .ok()
+                .and_then(|ctor| ctor.dyn_into::<js_sys::Function>().ok());
+
+                if let Some(ctor) = ctor {
+                    Reflect::construct(&ctor, &js_sys::Array::new()).unwrap_or(JsValue::NULL)
+                } else {
+                    js_sys::Object::new().into()
+                }
+            } else {
+                js_sys::Object::new().into()
+            };
+
+            // Populate properties
+            for (k, v) in map {
+                if k == "#type" { continue; }
+                let _ = js_sys::Reflect::set(&js_obj, &JsValue::from_str(&k), &external_to_js_value(v));
+            }
+
+            js_obj
+        }
+        ExternalValue::List(values) => {
+            let arr = js_sys::Array::new();
+            for v in values {
+                arr.push(&external_to_js_value(v));
+            }
+            arr.into()
+        }
+    }
+}
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_name = "triggerLingoCallbackOnScript")]
+    fn trigger_lingo_callback_on_script(
+        cast_lib: i32,
+        cast_member: i32,
+        handler_name: String,
+        args: String,
+        flash_cast_lib: i32,
+        flash_cast_member: i32,
+    );
+}
+
 #[derive(Copy, Clone, Collect)]
 #[collect(no_drop)]
 pub enum NativeObject<'gc> {
@@ -141,6 +214,17 @@ impl<'gc> NativeObject<'gc> {
             Self::EditText(dobj) => Some(DisplayObject::EditText(dobj)),
             Self::Video(dobj) => Some(DisplayObject::Video(dobj)),
             _ => None,
+        }
+    }
+}
+
+impl<'gc> Object<'gc> {
+    fn matches_callback(&self, name_str: &str, bean_manager: &str, callback: &LingoCallback) -> bool {
+        if name_str == "beanCreated" {
+            callback.method_name.eq_ignore_ascii_case(name_str) &&
+            callback.movie_clip_path.contains(bean_manager)
+        } else {
+            callback.method_name.eq_ignore_ascii_case(name_str)
         }
     }
 }
@@ -279,13 +363,97 @@ impl<'gc> Object<'gc> {
             }
         }
 
+        let name_clone = name.clone();
+        let name_str = name_clone.to_utf8_lossy();
+        let mut bean_manager: String = "".to_string();
+
+        // Enhanced logging section for beanCreated calls
+        if name_str == "beanCreated" {
+            tracing::trace!("beanCreated() called on object: {:p}", self.as_ptr());
+
+            // Look for the key identifier - sClass property
+            match self.get_stored(AvmString::new_utf8(activation.context.gc_context, "sClass"), activation) {
+                Ok(value) => {
+                    let class_name = value.coerce_to_string(activation)
+                        .map(|s| s.to_utf8_lossy().to_string())
+                        .unwrap_or_else(|_| "unknown".to_string());
+                    if let Some(manager_name) = class_name.split('.').last() {
+                        let manager_name = manager_name.replace("Possession", "Posession");
+                        let formatted_name = manager_name.replace("Flash", "o");
+                        tracing::trace!("   MANAGER TYPE IDENTIFIED: {}", formatted_name);
+                        bean_manager = formatted_name;
+                    } else {
+                        tracing::trace!("   MANAGER TYPE IDENTIFIED: {}", class_name);
+                    }
+                },
+                Err(_) => tracing::trace!("   No sClass found - cannot identify manager type"),
+            }
+        }
+
+        let args_clone: Vec<Value<'gc>> = args.iter().cloned().collect();
+        // Lingo callback handling
+        {
+            let callbacks_snapshot: Vec<_> = {
+                match LINGO_CALLBACKS.lock() {
+                    Ok(guard) => guard.clone(),
+                    Err(poisoned) => poisoned.into_inner().clone(),
+                }
+            };
+
+            for callback in callbacks_snapshot.iter() {
+                if !self.matches_callback(&name_str, &bean_manager, callback) {
+                    continue;
+                }
+
+                tracing::trace!(
+                    "Found matching Lingo callback! Triggering mcp: {} methodName: {} castLib: {} castMember: {} lingoHandler: {}",
+                    callback.movie_clip_path,
+                    callback.method_name,
+                    callback.lingo_cast_lib,
+                    callback.lingo_cast_member,
+                    callback.lingo_handler
+                );
+
+                let js_args_array = {
+                    let array = Array::new();
+                    for arg in args_clone.iter() {
+                        let ext_val = activation.store_and_convert_for_lingo(arg.to_owned());
+                        let js_val = external_to_js_value(ext_val);
+                        let json_str = JSON::stringify(&js_val)
+                            .ok()
+                            .and_then(|s| s.as_string())
+                            .unwrap_or_else(|| "null".to_string());
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(json_str);
+                        array.push(&JsValue::from_str(&b64));
+                    }
+                    array
+                };
+
+                let js_args_json = JSON::stringify(&js_args_array)
+                    .ok()
+                    .and_then(|s| s.as_string())
+                    .unwrap_or_else(|| "[]".to_string());
+                tracing::trace!("JSON string being added to queue (object): {}", js_args_json);
+
+                trigger_lingo_callback_on_script(
+                    callback.lingo_cast_lib,
+                    callback.lingo_cast_member,
+                    callback.lingo_handler.clone(),
+                    js_args_json,
+                    callback.flash_cast_lib,
+                    callback.flash_cast_member,
+                );
+            }
+        }
+
         // 'special' method calls appear to skip the `__resolve` fallback logic
         let call_resolve_fn = !matches!(reason, ExecutionReason::Special);
-        let (method, depth) =
-            match search_prototype(Value::Object(self), name, activation, self, call_resolve_fn)? {
-                Some((Value::Object(method), depth)) => (method, depth),
-                _ => return Ok(Value::Undefined),
-            };
+        let (method, depth) = match search_prototype(Value::Object(self), name, activation, self, call_resolve_fn)? {
+            Some((Value::Object(method), depth)) => (method, depth),
+            _ => {
+                return Ok(Value::Undefined);
+            }
+        };
 
         // If the method was found on the object itself, change `depth` as-if
         // the method was found on the object's prototype.
@@ -301,7 +469,14 @@ impl<'gc> Object<'gc> {
                 reason,
                 method,
             ),
-            None => method.call(name, activation, self.into(), args),
+            None => {
+                tracing::warn!(
+                    "Property '{}' on object {:p} exists but is not executable.",
+                    name_str,
+                    self.as_ptr()
+                );
+                return Ok(Value::Undefined);
+            }
         }
     }
 
@@ -395,8 +570,10 @@ pub fn search_prototype<'gc>(
     let orig_proto = proto;
 
     while let Value::Object(p) = proto {
-        if depth == 255 {
-            return Err(Error::PrototypeRecursionLimit);
+        // Surgical fix for Ruffle bug: Reduce recursion limit to prevent LoginServlet/StatusServlet
+        // circular reference between sBaseURI and sBaseUri properties
+        if depth == 10 {
+            return Ok(None); // Return None instead of error to allow graceful fallback
         }
 
         if let Some(getter) = p.getter(name, activation)
