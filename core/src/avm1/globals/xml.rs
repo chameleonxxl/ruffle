@@ -3,7 +3,7 @@
 use std::cell::Cell;
 
 use crate::avm_warn;
-use crate::avm1::function::ExecutionReason;
+use crate::avm1::function::{ExecutionReason};
 use crate::avm1::property_decl::{DeclContext, StaticDeclarations, SystemClass};
 use crate::avm1::xml::{ELEMENT_NODE, TEXT_NODE, XmlNode};
 use crate::avm1::{Activation, Attribute, Error, NativeObject, Object, Value};
@@ -295,8 +295,9 @@ fn constructor<'gc>(
             .get(istr!("ignoreWhite"), activation)?
             .as_bool(activation.swf_version());
 
+        tracing::trace!("parseXML input: {:?}", text.to_string());
         if let Err(e) = xml.parse(activation, &text, ignore_whitespace) {
-            avm_warn!(activation, "XML parsing error: {}", e);
+            tracing::trace!("XML parsing error: {} for input: {:?}", e, text.to_string());
         }
     }
 
@@ -427,6 +428,67 @@ fn on_data<'gc>(
 ) -> Result<Value<'gc>, Error<'gc>> {
     let src = args.get(0).cloned().unwrap_or(Value::Undefined);
 
+    // Check if this object has a custom onData property (not from prototype)
+    if this.has_own_property(activation, istr!("onData")) {
+        // Get the custom onData function
+        if let Ok(custom_on_data) = this.get(istr!("onData"), activation) {
+            if let Value::Object(custom_func) = custom_on_data {
+                tracing::trace!("Calling custom onData function instead of default XML onData");
+                return custom_func.call(istr!("onData"), activation, this.into(), args);
+            }
+        }
+    }
+
+    // Check if this XML object has a _creator (XMLManager case)
+    let creator_name = AvmString::new_utf8(activation.gc(), "_creator");
+    if let Ok(creator_value) = this.get(creator_name, activation) {
+        if let Value::Object(creator_obj) = creator_value {
+            tracing::trace!("XML.onData: Found _creator, handling as XMLManager XML object");
+
+            if let Value::String(xml_data) = src {
+                let xml_str = xml_data.to_string();
+                tracing::trace!("XML.onData (XMLManager): Received XML data: {}", xml_str);
+
+                if xml_str.is_empty() || !xml_str.starts_with('<') {
+                    tracing::trace!("XML.onData (XMLManager): Invalid XML data");
+                    let error_method = AvmString::new_utf8(activation.gc(), "returnError");
+                    creator_obj.call_method(error_method, &[], activation, ExecutionReason::FunctionCall)?;
+                    return Ok(Value::Undefined);
+                }
+
+                let parse_xml_method = AvmString::new_utf8(activation.gc(), "parseXML");
+                this.call_method(parse_xml_method, &[xml_data.into()], activation, ExecutionReason::FunctionCall)?;
+
+                let status = this.get(AvmString::new_utf8(activation.gc(), "status"), activation)?;
+
+                let on_load_method = AvmString::new_utf8(activation.gc(), "onLoad");
+                tracing::trace!("XML.onData: About to call creator.onLoad with status: {:?}", status);
+                creator_obj.call_method(on_load_method, &[status, this.into(), xml_data.into()], activation, ExecutionReason::FunctionCall)?;
+
+                tracing::trace!("XML.onData (XMLManager): Successfully processed XML and called onLoad");
+                return Ok(Value::Undefined);
+            } else {
+                tracing::trace!("XML.onData (XMLManager): No valid data received");
+                let error_method = AvmString::new_utf8(activation.gc(), "returnError");
+                creator_obj.call_method(error_method, &[], activation, ExecutionReason::FunctionCall)?;
+                return Ok(Value::Undefined);
+            }
+        }
+    }
+
+    // Debug logging
+    let data_preview = if let Value::String(s) = &src {
+        let preview = s.to_string();
+        if preview.len() > 100 {
+            format!("{}...", &preview[..100])
+        } else {
+            preview
+        }
+    } else {
+        "undefined".to_string()
+    };
+    tracing::trace!("XML default onData() called with: {}", data_preview);
+
     if let Value::Undefined = src {
         this.call_method(
             istr!("onLoad"),
@@ -516,6 +578,11 @@ fn spawn_xml_fetch<'gc>(
     send_object: Option<XmlNode<'gc>>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let url = url.to_utf8_lossy().into_owned();
+
+    // Log XML.load/send calls
+    let method = if send_object.is_some() { "send" } else { "load" };
+    let trace_msg = format!("XML.{}() called with URL: '{}'", method, url);
+    activation.context.avm_trace(&trace_msg);
 
     let request = if let Some(node) = send_object {
         // Send `node` as string.
