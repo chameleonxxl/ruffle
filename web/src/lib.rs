@@ -3,7 +3,7 @@
 //! Ruffle web frontend.
 mod audio;
 mod builder;
-mod external_interface;
+pub mod external_interface;
 mod input;
 mod log_adapter;
 mod navigator;
@@ -12,7 +12,7 @@ mod ui;
 mod zip;
 
 use crate::builder::RuffleInstanceBuilder;
-use external_interface::{external_to_js_value, js_to_external_value};
+pub use external_interface::{external_to_js_value, js_to_external_value};
 use input::{web_input_to_ruffle_key_descriptor, web_to_ruffle_text_control};
 use js_sys::{Error as JsError, Uint8Array};
 use ruffle_core::context::UpdateContext;
@@ -42,6 +42,42 @@ use web_sys::{
     KeyboardEvent, Node, PageTransitionEvent, PointerEvent, ShadowRoot, WebGlContextEvent,
     WheelEvent, Window,
 };
+use ruffle_core::{LingoCallback, LINGO_CALLBACKS};
+
+#[wasm_bindgen(js_name = "ruffleRegisterLingoCallback")]
+pub fn ruffle_register_lingo_callback(
+    movie_clip_path: String,
+    method_name: String,
+    lingo_cast_lib: i32,
+    lingo_cast_member: i32,
+    lingo_handler: String,
+    flash_cast_lib: i32,
+    flash_cast_member: i32,
+) {
+    let callback = LingoCallback {
+        movie_clip_path,
+        method_name,
+        lingo_cast_lib,
+        lingo_cast_member,
+        lingo_handler,
+        flash_cast_lib,
+        flash_cast_member,
+    };
+
+    if let Ok(mut callbacks) = LINGO_CALLBACKS.lock() {
+        // Remove any existing callback with the same lingo handler + cast member
+        // to prevent duplicate dispatches when script instances are re-created
+        callbacks.retain(|existing| {
+            !(existing.lingo_handler == callback.lingo_handler
+                && existing.lingo_cast_lib == callback.lingo_cast_lib
+                && existing.lingo_cast_member == callback.lingo_cast_member
+                && existing.method_name == callback.method_name)
+        });
+        callbacks.push(callback);
+    } else {
+        tracing::trace!("Failed to acquire mutex for Lingo callbacks");
+    }
+}
 
 static RUFFLE_GLOBAL_PANIC: Once = Once::new();
 
@@ -322,6 +358,14 @@ impl RuffleHandle {
         self.with_core(|core| core.is_playing()).unwrap_or_default()
     }
 
+    /// dirplayer goToFrame method
+    /// Go to a specific frame (1-based) on the root movie clip.
+    pub fn goto_frame(&self, frame: u16, stop: bool) {
+        let _ = self.with_core_mut(|core| {
+            core.goto_frame(frame, stop);
+        });
+    }
+
     pub fn has_focus(&self) -> bool {
         self.with_instance(|instance| instance.has_focus)
             .unwrap_or_default()
@@ -462,6 +506,52 @@ impl RuffleHandle {
         let _ = self.with_instance(|instance| {
             *instance.trace_observer.borrow_mut() = observer;
         });
+    }
+
+    /// dirplayer GetVariable method
+    pub fn get_variable(&self, path: &str) -> JsValue {
+        if !path.contains("__jlSignal") {
+            tracing::trace!("GetVariable called with path: {}", path);
+        }
+
+        self.with_core_mut(|player| {
+            let result = player.get_variable(path);
+            external_to_js_value(result)
+        }).unwrap_or(JsValue::UNDEFINED)
+    }
+
+    /// dirplayer SetVariable method
+    pub fn set_variable(&self, path: &str, value: JsValue) -> bool {
+        tracing::trace!("SetVariable called with path: {}, value: {:?}", path, value);
+
+        self.with_core_mut(|player| {
+            let external_value = js_to_external_value(&value);
+            player.set_variable(path, external_value)
+        }).unwrap_or(false)
+    }
+
+    /// dirplayer CallFunction method
+    pub fn call_function(&self, path: &str, args: Box<[JsValue]>) -> JsValue {
+        tracing::trace!("CallFunction called with path: {}, args: {:?}", path, args);
+
+        self.with_core_mut(|player| {
+            let external_args: Vec<ruffle_core::external::Value> = args
+                .iter()
+                .map(|arg| js_to_external_value(arg))
+                .collect();
+
+            let result = player.call_function(path, external_args);
+            external_to_js_value(result)
+        }).unwrap_or(JsValue::UNDEFINED)
+    }
+
+    /// dirplayer SetCallback method for event handling
+    pub fn set_callback(&self, flash_object_path: &str, event_name: &str, callback_id: &str) -> bool {
+        tracing::trace!("SetCallback called with object: {}, event: {}, callback: {}", flash_object_path, event_name, callback_id);
+
+        self.with_core_mut(|player| {
+            player.set_callback(flash_object_path, event_name, callback_id)
+        }).unwrap_or(false)
     }
 
     /// Returns the web AudioContext used by this player.
@@ -1376,5 +1466,5 @@ fn global_init() {
         });
     }));
 
-    tracing::info!("Ruffle WASM module has been initialized");
+    tracing::trace!("Ruffle WASM module has been initialized");
 }

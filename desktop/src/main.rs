@@ -66,7 +66,12 @@ fn panic_hook(info: &PanicHookInfo) {
         }
     });
 
-    let message = info.payload_as_str().unwrap_or("panic occurred");
+    let message = info
+        .payload()
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+        .unwrap_or("panic occurred");
 
     if rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)

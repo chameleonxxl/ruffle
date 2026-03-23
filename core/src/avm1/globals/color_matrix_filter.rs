@@ -61,11 +61,10 @@ impl<'gc> ColorMatrixFilter<'gc> {
     }
 
     fn matrix(self, activation: &mut Activation<'_, 'gc>) -> Value<'gc> {
-        // Use `.as_array_of_cells()` to avoid a copy out of the `Cell`.
-        let matrix = self.0.matrix.as_array_of_cells();
+        let matrix = self.0.matrix.get();
 
         ArrayBuilder::new(activation)
-            .with(matrix.iter().map(|v| v.get().into()))
+            .with(matrix.iter().map(|&v| v.into()))
             .into()
     }
 

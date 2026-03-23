@@ -90,7 +90,7 @@ impl Default for RuffleInstanceBuilder {
             force_scale: false,
             frame_rate: None,
             wmode: None,
-            log_level: tracing::Level::ERROR,
+            log_level: tracing::Level::WARN,
             max_execution_duration: Duration::from_secs_f64(15.0),
             player_version: None,
             preferred_renderer: None,
