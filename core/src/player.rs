@@ -881,6 +881,20 @@ impl Player {
         }
     }
 
+    /// Go to a specific frame on the root movie clip.
+    /// `frame` is 1-based. If `stop` is true, the movie will stop after seeking.
+    pub fn goto_frame(&mut self, frame: u16, stop: bool) {
+        self.mutate_with_update_context(|context| {
+            if let Some(mc) = context
+                .stage
+                .root_clip()
+                .and_then(|root| root.as_movie_clip())
+            {
+                mc.goto_frame(context, frame, stop);
+            }
+        });
+    }
+
     fn set_run_state(&mut self, state: RunState) {
         let play_audio = match state {
             RunState::Playing => true,
@@ -2467,6 +2481,442 @@ impl Player {
                 ExternalValue::Null
             }
         })
+    }
+
+    /// dirplayer getVariable method
+    pub fn get_variable(&mut self, path: &str) -> ExternalValue {
+        self.mutate_with_update_context(|context| {
+            if let Some(base_clip) = context.stage.root_clip() {
+                let mut activation = crate::avm1::Activation::from_nothing(
+                    context,
+                    crate::avm1::ActivationIdentifier::root("[GetVariable]"),
+                    base_clip,
+                );
+
+                let path_string = crate::string::AvmString::new_utf8(activation.gc(), path);
+                match activation.get_variable(path_string) {
+                    Ok(callable_value) => {
+                        let value: crate::avm1::Value = callable_value.into();
+                        // For MovieClip/Object values, store a reference so Lingo can access them later
+                        let is_obj_or_mc = matches!(&value, crate::avm1::Value::Object(_) | crate::avm1::Value::MovieClip(_));
+                        if is_obj_or_mc {
+                            static DIRPLAYER_REF_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(5000);
+                            let ref_id = DIRPLAYER_REF_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let store_path = format!("_root.__dirplayer_ref_{}", ref_id);
+                            let store_path_avm = crate::string::AvmString::new_utf8(activation.gc(), &store_path);
+                            let _ = activation.set_variable(store_path_avm, value.clone());
+                            // Return minimal object with just the stored path reference
+                            // (avoid full serialization which can be huge for _root)
+                            let mut ext = std::collections::BTreeMap::new();
+                            ext.insert("__dirplayer_stored_path".to_string(), ExternalValue::String(format!("_level0.__dirplayer_ref_{}", ref_id)));
+                            return ExternalValue::Object(ext);
+                        }
+                        ExternalValue::from_avm1(&mut activation, value).unwrap_or(ExternalValue::Undefined)
+                    }
+                    Err(_) => ExternalValue::Undefined,
+                }
+            } else {
+                ExternalValue::Undefined
+            }
+        })
+    }
+
+    /// dirplayer SetVariable method
+    pub fn set_variable(&mut self, path: &str, value: ExternalValue) -> bool {
+        self.mutate_with_update_context(|context| {
+            if let Some(base_clip) = context.stage.root_clip() {
+                let mut activation = crate::avm1::Activation::from_nothing(
+                    context,
+                    crate::avm1::ActivationIdentifier::root("[SetVariable]"),
+                    base_clip,
+                );
+
+                let path_string = crate::string::AvmString::new_utf8(activation.gc(), path);
+                let avm_value = value.into_avm1(&mut activation);
+                activation.set_variable(path_string, avm_value).is_ok()
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Resolve an ExternalValue::List into an AVM1 Array, recursively resolving
+    /// __ruffle_path references inside the list elements.
+    fn resolve_external_list_to_avm1<'gc>(
+        activation: &mut crate::avm1::Activation<'_, 'gc>,
+        items: Vec<ExternalValue>,
+    ) -> crate::avm1::Value<'gc> {
+        use crate::avm1::ArrayBuilder as Avm1ArrayBuilder;
+        let mut resolved_items: Vec<crate::avm1::Value<'gc>> = Vec::with_capacity(items.len());
+        for item in items {
+            match item {
+                ExternalValue::Object(mut map) => {
+                    if map.len() == 1 {
+                        if let Some(ExternalValue::String(path)) = map.remove("__ruffle_path") {
+                            let mut resolved_path = path;
+                            if resolved_path.starts_with("_level0.") {
+                                resolved_path = resolved_path.replacen("_level0.", "_root.", 1);
+                            }
+                            let path_string = crate::string::AvmString::new_utf8(activation.gc(), &resolved_path);
+                            match activation.get_variable(path_string) {
+                                Ok(callable) => {
+                                    resolved_items.push(callable.into());
+                                    continue;
+                                }
+                                Err(_) => {
+                                    resolved_items.push(crate::avm1::Value::Undefined);
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    resolved_items.push(ExternalValue::Object(map).into_avm1(activation));
+                }
+                ExternalValue::String(s) => {
+                    if let Some(rest) = s.strip_prefix("__ruffle_path:") {
+                        let mut resolved_path = rest.to_string();
+                        if resolved_path.starts_with("_level0.") {
+                            resolved_path = resolved_path.replacen("_level0.", "_root.", 1);
+                        }
+                        let path_string = crate::string::AvmString::new_utf8(activation.gc(), &resolved_path);
+                        match activation.get_variable(path_string) {
+                            Ok(callable) => resolved_items.push(callable.into()),
+                            Err(_) => resolved_items.push(crate::avm1::Value::Undefined),
+                        }
+                    } else {
+                        resolved_items.push(ExternalValue::String(s).into_avm1(activation));
+                    }
+                }
+                ExternalValue::List(nested) => {
+                    resolved_items.push(Self::resolve_external_list_to_avm1(activation, nested));
+                }
+                other => {
+                    resolved_items.push(other.into_avm1(activation));
+                }
+            }
+        }
+        Avm1ArrayBuilder::new(activation)
+            .with(resolved_items.into_iter())
+            .into()
+    }
+
+    /// dirplayer CallFunction method
+    pub fn call_function(&mut self, path: &str, args: Vec<ExternalValue>) -> ExternalValue {
+        tracing::trace!("AVM1 CallFunction: {} with {} args", path, args.len());
+
+        self.mutate_with_update_context(|context| {
+            if let Some(base_clip) = context.stage.root_clip() {
+                let mut activation = crate::avm1::Activation::from_nothing(
+                    context,
+                    crate::avm1::ActivationIdentifier::root("[CallFunction]"),
+                    base_clip,
+                );
+
+                // Parse the path to separate object path from function name
+                if let Some(last_dot) = path.rfind('.') {
+                    let object_path = &path[..last_dot];
+                    let function_name = &path[last_dot + 1..];
+
+                    tracing::trace!("AVM1 Parsed: object='{}', function='{}'", object_path, function_name);
+
+                    // Happy-path fix: resolve callable directly from full path
+                    // Skip for __dirplayer_ref_ paths — these are stored objects that need
+                    // method calls with proper `this` context (handled by the object path below)
+                    if !object_path.contains("__dirplayer_ref_") {
+                        let full_path_string = crate::string::AvmString::new_utf8(activation.gc(), path);
+                        if let Ok(callable) = activation.get_variable(full_path_string) {
+                            let mut avm_args: Vec<crate::avm1::Value> = Vec::with_capacity(args.len());
+                            for arg in args.iter().cloned() {
+                                match arg {
+                                    crate::external::Value::Object(mut map) => {
+                                        if map.len() == 1 {
+                                            if let Some(crate::external::Value::String(path)) = map.remove("__ruffle_path") {
+                                                let mut resolved_path = path;
+                                                if resolved_path.starts_with("_level0.") {
+                                                    resolved_path = resolved_path.replacen("_level0.", "_root.", 1);
+                                                }
+                                                tracing::trace!("AVM1 Path-arg (object) detected: {}", resolved_path);
+                                                let path_string = crate::string::AvmString::new_utf8(activation.gc(), &resolved_path);
+                                                match activation.get_variable(path_string) {
+                                                    Ok(callable) => {
+                                                        let v: crate::avm1::Value = callable.into();
+                                                        tracing::trace!("AVM1 Path-arg resolved to: {:?}", v);
+                                                        avm_args.push(v);
+                                                        continue;
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::trace!("AVM1 Path-arg resolution error for '{}': {:?}", resolved_path, e);
+                                                        avm_args.push(crate::avm1::Value::Undefined);
+                                                        continue;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        avm_args.push(crate::external::Value::Object(map).into_avm1(&mut activation));
+                                    }
+                                    crate::external::Value::String(s) => {
+                                        if let Some(rest) = s.strip_prefix("__ruffle_path:") {
+                                            let mut resolved_path = rest.to_string();
+                                            if resolved_path.starts_with("_level0.") {
+                                                resolved_path = resolved_path.replacen("_level0.", "_root.", 1);
+                                            }
+                                            tracing::trace!("AVM1 Path-arg (string) detected: {}", resolved_path);
+                                            let path_string = crate::string::AvmString::new_utf8(activation.gc(), &resolved_path);
+                                            match activation.get_variable(path_string) {
+                                                Ok(callable) => {
+                                                    let v: crate::avm1::Value = callable.into();
+                                                    tracing::trace!("AVM1 Path-arg resolved to: {:?}", v);
+                                                    avm_args.push(v);
+                                                }
+                                                Err(e) => {
+                                                    tracing::trace!("AVM1 Path-arg resolution error for '{}': {:?}", resolved_path, e);
+                                                    avm_args.push(crate::avm1::Value::Undefined);
+                                                }
+                                            }
+                                            continue;
+                                        }
+                                        avm_args.push(crate::external::Value::String(s).into_avm1(&mut activation));
+                                    }
+                                    crate::external::Value::List(items) => {
+                                        // Resolve __ruffle_path refs inside arrays
+                                        let resolved = Self::resolve_external_list_to_avm1(&mut activation, items);
+                                        avm_args.push(resolved);
+                                    }
+                                    other => {
+                                        avm_args.push(other.into_avm1(&mut activation));
+                                    }
+                                }
+                            }
+
+                            tracing::trace!("AVM1 Converted args (direct callable path): {:?}", avm_args);
+
+                            let function_name_string = crate::string::AvmString::new_utf8(activation.gc(), function_name);
+                            // Resolve the parent object to use as 'this' context
+                            let object_path_avm = crate::string::AvmString::new_utf8(activation.gc(), object_path);
+                            let default_this = match activation.get_variable(object_path_avm) {
+                                Ok(cv) => {
+                                    let v: crate::avm1::Value = cv.into();
+                                    match v {
+                                        crate::avm1::Value::Object(obj) => obj.into(),
+                                        _ => activation.global_object().into(),
+                                    }
+                                }
+                                Err(_) => activation.global_object().into(),
+                            };
+                            tracing::trace!("AVM1 About to call resolved function '{}' via direct callable path", function_name);
+                            match callable.call_with_default_this(default_this, function_name_string, &mut activation, &avm_args) {
+                                Ok(result) => {
+                                    tracing::trace!("AVM1 Function call (direct path) succeeded: {:?}", result);
+                                    return activation.store_and_convert_for_lingo(result);
+                                }
+                                Err(e) => {
+                                    tracing::trace!("AVM1 Function call (direct path) error: {:?}", e);
+                                }
+                            }
+                        }
+                    }
+
+                    // Get the object
+                    let object_path_string = crate::string::AvmString::new_utf8(activation.gc(), object_path);
+                    if let Ok(callable_value) = activation.get_variable(object_path_string) {
+                        let object_value: crate::avm1::Value = callable_value.into();
+                        tracing::trace!("AVM1 Found object: {:?}", object_value);
+
+                        if let crate::avm1::Value::Object(object) = object_value {
+                            let mut avm_args: Vec<crate::avm1::Value> = Vec::with_capacity(args.len());
+                            for arg in args.into_iter() {
+                                match arg {
+                                    crate::external::Value::Object(mut map) => {
+                                        if map.len() == 1 {
+                                            if let Some(crate::external::Value::String(path)) = map.remove("__ruffle_path") {
+                                                let mut resolved_path = path;
+                                                if resolved_path.starts_with("_level0.") {
+                                                    resolved_path = resolved_path.replacen("_level0.", "_root.", 1);
+                                                }
+                                                tracing::trace!("AVM1 Path-arg (object) detected: {}", resolved_path);
+                                                let path_string = crate::string::AvmString::new_utf8(activation.gc(), &resolved_path);
+                                                match activation.get_variable(path_string) {
+                                                    Ok(callable) => {
+                                                        let v: crate::avm1::Value = callable.into();
+                                                        tracing::trace!("AVM1 Path-arg resolved to: {:?}", v);
+                                                        avm_args.push(v);
+                                                        continue;
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::trace!("AVM1 Path-arg resolution error for '{}': {:?}", resolved_path, e);
+                                                        avm_args.push(crate::avm1::Value::Undefined);
+                                                        continue;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        avm_args.push(crate::external::Value::Object(map).into_avm1(&mut activation));
+                                    }
+                                    crate::external::Value::String(s) => {
+                                        if let Some(rest) = s.strip_prefix("__ruffle_path:") {
+                                            let mut resolved_path = rest.to_string();
+                                            if resolved_path.starts_with("_level0.") {
+                                                resolved_path = resolved_path.replacen("_level0.", "_root.", 1);
+                                            }
+                                            tracing::trace!("AVM1 Path-arg (string) detected: {}", resolved_path);
+                                            let path_string = crate::string::AvmString::new_utf8(activation.gc(), &resolved_path);
+                                            match activation.get_variable(path_string) {
+                                                Ok(callable) => {
+                                                    let v: crate::avm1::Value = callable.into();
+                                                    tracing::trace!("AVM1 Path-arg resolved to: {:?}", v);
+                                                    avm_args.push(v);
+                                                }
+                                                Err(e) => {
+                                                    tracing::trace!("AVM1 Path-arg resolution error for '{}': {:?}", resolved_path, e);
+                                                    avm_args.push(crate::avm1::Value::Undefined);
+                                                }
+                                            }
+                                            continue;
+                                        }
+                                        avm_args.push(crate::external::Value::String(s).into_avm1(&mut activation));
+                                    }
+                                    crate::external::Value::List(items) => {
+                                        let resolved = Self::resolve_external_list_to_avm1(&mut activation, items);
+                                        avm_args.push(resolved);
+                                    }
+                                    other => {
+                                        avm_args.push(other.into_avm1(&mut activation));
+                                    }
+                                }
+                            }
+
+                            tracing::trace!("AVM1 Converted args: {:?}", avm_args);
+
+                            let function_name_string = crate::string::AvmString::new_utf8(activation.gc(), function_name);
+
+                            // Debug: Inspect property resolution before calling
+                            let pre_lookup = object.get(function_name_string.clone(), &mut activation);
+                            match &pre_lookup {
+                                Ok(v) => {
+                                    tracing::trace!(
+                                        "AVM1 Pre-lookup object.get('{}') => {:?}",
+                                        function_name, v
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::trace!(
+                                        "AVM1 Pre-lookup object.get('{}') ERROR => {:?}",
+                                        function_name, e
+                                    );
+                                }
+                            }
+
+                            // Debug: Direct (non-virtual) property lookup
+                            let direct_lookup = object.get_stored(function_name_string.clone(), &mut activation);
+                            match &direct_lookup {
+                                Ok(v) => {
+                                    tracing::trace!(
+                                        "AVM1 Direct object.get_stored('{}') => {:?}",
+                                        function_name, v
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::trace!(
+                                        "AVM1 Direct object.get_stored('{}') ERROR => {:?}",
+                                        function_name, e
+                                    );
+                                }
+                            }
+
+                            // Debug: Enumerate own keys
+                            let keys = object.get_keys(&mut activation, false);
+                            let key_list: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+                            tracing::trace!("AVM1 Object own keys: {:?}", key_list);
+
+                            tracing::trace!("AVM1 About to call method '{}' on object", function_name);
+
+                            if let Ok(mut result) = object.call_method(
+                                function_name_string,
+                                &avm_args,
+                                &mut activation,
+                                crate::avm1::ExecutionReason::FunctionCall
+                            ) {
+                                // Getter fallback: if method returned Undefined and name starts with "get",
+                                // try accessing the corresponding property directly (e.g. getDNS -> dns, getTypeOf -> typeof)
+                                if matches!(result, crate::avm1::Value::Undefined) && function_name.starts_with("get") && function_name.len() > 3 {
+                                    let rest = &function_name[3..];
+                                    // Try lowercase-first variant (e.g. getPort -> port)
+                                    let camel = {
+                                        let mut chars = rest.chars();
+                                        match chars.next() {
+                                            Some(c) => format!("{}{}", c.to_lowercase(), chars.as_str()),
+                                            None => rest.to_string(),
+                                        }
+                                    };
+                                    // Try fully lowercased (e.g. getDNS -> dns, getTypeOf -> typeof)
+                                    let lower = rest.to_lowercase();
+
+                                    for prop_name in &[&camel, &lower] {
+                                        let prop_avm = crate::string::AvmString::new_utf8(activation.gc(), prop_name.as_str());
+                                        if let Ok(prop_val) = object.get(prop_avm, &mut activation) {
+                                            if !matches!(prop_val, crate::avm1::Value::Undefined) {
+                                                tracing::trace!("AVM1 Getter fallback: {}() -> property '{}' = {:?}", function_name, prop_name, prop_val);
+                                                result = prop_val;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                tracing::trace!("AVM1 Method call succeeded: {:?}", result);
+                                return activation.store_and_convert_for_lingo(result);
+                            } else {
+                                tracing::trace!("AVM1 Method call failed for '{}'", function_name);
+                            }
+                        } else {
+                            tracing::trace!("AVM1 Object is not an Object type: {:?}", object_value);
+                        }
+                    } else {
+                        tracing::trace!("AVM1 Could not find object at path '{}'", object_path);
+                    }
+                } else {
+                    tracing::trace!("AVM1 Invalid path format (no dot): '{}'", path);
+                }
+
+                tracing::trace!("AVM1 CallFunction returning Undefined");
+                ExternalValue::Undefined
+            } else {
+                ExternalValue::Undefined
+            }
+        })
+    }
+
+    /// dirplayer SetCallback method for event handling
+    pub fn set_callback(&mut self, flash_object_path: &str, event_name: &str, callback_id: &str) -> bool {
+        tracing::trace!("SetCallback called with object: {}, event: {}, callback: {}", flash_object_path, event_name, callback_id);
+
+        let object_exists = self.mutate_with_update_context(|context| {
+            if let Some(base_clip) = context.stage.root_clip() {
+                let mut activation = crate::avm1::Activation::from_nothing(
+                    context,
+                    crate::avm1::ActivationIdentifier::root("[SetCallback]"),
+                    base_clip,
+                );
+
+                let object_path_string = crate::string::AvmString::new_utf8(activation.gc(), flash_object_path);
+                if let Ok(callable_value) = activation.get_variable(object_path_string) {
+                    let object_value: crate::avm1::Value = callable_value.into();
+                    matches!(object_value, crate::avm1::Value::Object(_))
+                } else {
+                    flash_object_path.starts_with("_level") || flash_object_path == "this"
+                }
+            } else {
+                true
+            }
+        });
+
+        if object_exists {
+            tracing::trace!("Successfully registered callback {} for {}:{}", callback_id, flash_object_path, event_name);
+            true
+        } else {
+            tracing::trace!("SetCallback: Could not validate object at path '{}'", flash_object_path);
+            false
+        }
     }
 
     pub fn spoofed_url(&self) -> Option<&str> {

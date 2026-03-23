@@ -165,6 +165,26 @@ export class RufflePlayerElement extends HTMLElement implements PlayerElement {
         }
     }
 
+    public GetVariable(path: string): any {
+        return this.#inner.getVariable(path);
+    }
+
+    public SetVariable(path: string, value: any): boolean {
+        return this.#inner.setVariable(path, value);
+    }
+
+    public CallFunction(path: string, args: any[] = []): any {
+        return this.#inner.callFunction(path, args);
+    }
+
+    public GotoFrame(frame: number, stop: boolean = true): void {
+        this.#inner.gotoFrame(frame, stop);
+    }
+
+    public SetCallback(flashObjectPath: string, eventName: string, callbackId: string): boolean {
+        return this.#inner.setCallback(flashObjectPath, eventName, callbackId);
+    }
+
     get config(): URLLoadOptions | DataLoadOptions | object {
         return this.#inner.config;
     }

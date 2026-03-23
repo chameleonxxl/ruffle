@@ -4,7 +4,7 @@ use crate::avm1::function::{Avm1Function, ExecutionReason, FunctionObject};
 use crate::avm1::property::Attribute;
 use crate::avm1::runtime::skip_actions;
 use crate::avm1::scope::{Scope, ScopeClass};
-use crate::avm1::{ArrayBuilder, Object, Value, fscommand, globals, scope};
+use crate::avm1::{ArrayBuilder, NativeObject, Object, Value, fscommand, globals, scope};
 use crate::backend::navigator::{NavigationMethod, Request};
 use crate::context::UpdateContext;
 use crate::display_object::{
@@ -26,6 +26,8 @@ use swf::avm1::read::Reader;
 use swf::avm1::types::*;
 use url::form_urlencoded;
 use web_time::Instant;
+
+use crate::external::Value as ExternalValue;
 
 use super::object_reference::MovieClipReference;
 
@@ -196,6 +198,39 @@ impl<'gc> HasStringContext<'gc> for Activation<'_, 'gc> {
 }
 
 impl<'a, 'gc> Activation<'a, 'gc> {
+    pub fn describe_value(&mut self, value: &Value<'gc>, depth: usize) -> String {
+        if depth > 4 {
+            return "[Max depth reached]".to_string();
+        }
+
+        match value {
+            Value::Object(obj) => {
+                let keys = obj.get_keys(self, false);
+                let mut props = vec![];
+
+                for key in keys {
+                    let val = obj.get(key, self).unwrap_or(Value::Undefined);
+                    let key_str = key.to_string();
+                    let val_str = self.describe_value(&val, depth + 1);
+                    props.push(format!("{}: {}", key_str, val_str));
+                }
+
+                format!("[object Object {{{}}}]", props.join(", "))
+            }
+
+            Value::MovieClip(mc) => {
+                let path = mc.coerce_to_string(self);
+                format!("[object MovieClip (Path: {})]", path)
+            }
+
+            Value::String(s) => format!("\"{}\"", s.to_string()),
+            Value::Bool(b) => b.to_string(),
+            Value::Number(n) => n.to_string(),
+            Value::Undefined => "undefined".to_string(),
+            Value::Null => "null".to_string(),
+        }
+    }
+
     /// Convenience method to retrieve the current GC context. Note that explicitly writing
     /// `self.context.gc_context` can be sometimes necessary to satisfy the borrow checker.
     #[inline(always)]
@@ -781,6 +816,8 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let num_args = self.context.avm1.pop().coerce_to_u32(self)? as usize;
         let args = self.pop_call_args(num_args);
 
+        let args_clone = args.clone();
+
         // Can not call method on undefined/null.
         if matches!(object_val, Value::Undefined | Value::Null) {
             self.stack_push(Value::Undefined);
@@ -797,11 +834,15 @@ impl<'a, 'gc> Activation<'a, 'gc> {
 
         let result = if method_name.is_empty() {
             // Undefined/empty method name; call `this` as a function.
-            object.call("[Anonymous]", self, Value::Undefined, &args)?
+            object.call("[Anonymous]", self, Value::Undefined, &args_clone)?
         } else {
             // Call `this[method_name]`.
-            object.call_method(method_name, &args, self, ExecutionReason::FunctionCall)?
+            object.call_method(method_name, &args_clone, self, ExecutionReason::FunctionCall)?
         };
+
+        // NOTE: Lingo callback dispatch is handled by object.call_method() in object.rs.
+        // Do NOT duplicate it here — that causes callbacks to fire multiple times.
+
         self.stack_push(result);
 
         self.continue_if_base_clip_exists()
@@ -3025,5 +3066,62 @@ impl<'a, 'gc> Activation<'a, 'gc> {
 
         self.set_scope(Scope::new_target_scope(self.scope(), clip_obj, self.gc()));
         Ok(FrameControl::Continue)
+    }
+
+    /// Store an AVM1 value in Flash scope and convert to ExternalValue for Lingo.
+    /// Objects are stored at `_root.__dirplayer_ref_N` so Lingo can call methods on them.
+    /// Arrays of objects store each element and return an array of references.
+    pub fn store_and_convert_for_lingo(&mut self, value: Value<'gc>) -> ExternalValue {
+        static REF_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1000);
+
+        tracing::trace!("store_and_convert_for_lingo: value type = {:?}", std::mem::discriminant(&value));
+        match &value {
+            Value::Object(obj) => {
+                tracing::trace!("store_and_convert_for_lingo: Object native = {:?}, is_array = {}",
+                    std::mem::discriminant(&obj.native()),
+                    matches!(obj.native(), NativeObject::Array(_)));
+            }
+            other => {
+                tracing::trace!("store_and_convert_for_lingo: non-object value = {:?}", other);
+            }
+        }
+
+        match &value {
+            Value::Object(object) if matches!(object.native(), NativeObject::Array(_)) => {
+                // Array: store each element and return a list of stored refs
+                let length = object.length(self).unwrap_or(0);
+                let mut items = Vec::new();
+                for i in 0..length {
+                    let element = object.get_element(self, i);
+                    items.push(self.store_and_convert_for_lingo(element));
+                }
+                ExternalValue::List(items)
+            }
+            Value::Object(_) => {
+                // Store the object at a known path in Flash scope
+                let ref_id = REF_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let store_path = format!("_root.__dirplayer_ref_{}", ref_id);
+                let store_path_avm = AvmString::new_utf8(self.gc(), &store_path);
+                if let Err(e) = self.set_variable(store_path_avm, value) {
+                    tracing::trace!("Failed to store object at {}: {:?}", store_path, e);
+                    return ExternalValue::Null;
+                }
+                // Return an object with __dirplayer_stored_path
+                let mut map = std::collections::BTreeMap::new();
+                map.insert(
+                    "__dirplayer_stored_path".to_string(),
+                    ExternalValue::String(format!("_level0.__dirplayer_ref_{}", ref_id)),
+                );
+                ExternalValue::Object(map)
+            }
+            _ => {
+                // Primitives: convert normally
+                // Note: empty string "" passes through as Datum::String("") in Lingo.
+                // In Director, voidp("") = FALSE, so Lingo checks like "if not voidp(iXPos)"
+                // treat "" as a provided value. getSquareByRowCol then handles "" via
+                // numeric coercion ("" → 0) and returns VOID from its bounds guard.
+                ExternalValue::from_avm1(self, value).unwrap_or(ExternalValue::Null)
+            }
+        }
     }
 }

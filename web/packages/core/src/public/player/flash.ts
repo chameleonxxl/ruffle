@@ -14,4 +14,44 @@ export interface FlashAPI {
      * @returns a value from 0 to 100, inclusive.
      */
     PercentLoaded(): number;
+
+    /**
+     * Gets a variable from the Flash movie.
+     * Supports path-based access like "_level0.oDenizenManager" or "_level0.someVar".
+     *
+     * @param path The variable path to retrieve
+     * @returns The variable value, or undefined if not found
+     */
+    GetVariable(path: string): any;
+
+    /**
+     * Sets a variable in the Flash movie.
+     * Supports path-based access like "_level0.someVar".
+     *
+     * @param path The variable path to set
+     * @param value The value to set
+     * @returns true if successful, false otherwise
+     */
+    SetVariable(path: string, value: any): boolean;
+
+    /**
+     * Calls a function in the Flash movie.
+     * Supports calling ActionScript methods with parameters.
+     *
+     * @param path The function path to call (e.g., "_root.oDenizenManager.createGateway")
+     * @param args Array of arguments to pass to the function
+     * @returns The function result, or undefined if call failed
+     */
+    CallFunction(path: string, args?: any[]): any;
+
+    /**
+     * Sets a callback for Flash events.
+     * Allows registration of JavaScript handlers for Flash ActionScript events.
+     *
+     * @param flashObjectPath The Flash object path (e.g., "_root.oDenizenManager")
+     * @param eventName The event name to listen for (e.g., "beanCreated")
+     * @param callbackId The callback identifier for the handler
+     * @returns true if callback was registered successfully, false otherwise
+     */
+    SetCallback(flashObjectPath: string, eventName: string, callbackId: string): boolean;
 }
