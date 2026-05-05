@@ -137,8 +137,11 @@ export class RuffleEmbedElement extends RufflePlayerElement {
      * @returns Created RuffleEmbed.
      */
     static fromNativeEmbedElement(elem: Element): RuffleEmbedElement {
+        // dirplayer_ prefix on the tag name so it doesn't collide with stock
+        // Ruffle's `<ruffle-embed>` registration (customElements.define
+        // throws on duplicates).
         const externalName = registerElement(
-            "ruffle-embed",
+            "dirplayer_ruffle-embed",
             RuffleEmbedElement,
         );
         const ruffleObj = document.createElement(

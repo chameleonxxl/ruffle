@@ -41,7 +41,11 @@ export const internalSourceApi = {
      * into the current page as you wish.
      */
     createPlayer(): PlayerElement {
-        const name = registerElement("ruffle-player", RufflePlayerElement);
+        // Custom-element tag is namespaced so it doesn't collide with stock
+        // Ruffle's `<ruffle-player>` registration when both bundles are on
+        // the same page (e.g. via a browser extension); customElements.define
+        // throws on duplicate names.
+        const name = registerElement("dirplayer_ruffle-player", RufflePlayerElement);
         return document.createElement(name) as RufflePlayerElement;
     },
 

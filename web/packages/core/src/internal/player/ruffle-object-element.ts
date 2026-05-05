@@ -177,10 +177,12 @@ export class RuffleObjectElement extends RufflePlayerElement {
             return false;
         }
 
-        // Don't polyfill if there's already a <ruffle-object> or a <ruffle-embed> inside the <object>.
+        // Don't polyfill if there's already a <dirplayer_ruffle-object> or
+        // a <dirplayer_ruffle-embed> inside the <object>. (Tag names are
+        // namespaced under dirplayer_ in this fork; see register sites.)
         if (
-            elem.getElementsByTagName("ruffle-object").length > 0 ||
-            elem.getElementsByTagName("ruffle-embed").length > 0
+            elem.getElementsByTagName("dirplayer_ruffle-object").length > 0 ||
+            elem.getElementsByTagName("dirplayer_ruffle-embed").length > 0
         ) {
             return false;
         }
@@ -253,8 +255,11 @@ export class RuffleObjectElement extends RufflePlayerElement {
      * @returns Created RuffleObject.
      */
     static fromNativeObjectElement(elem: Element): RuffleObjectElement {
+        // dirplayer_ prefix on the tag name so it doesn't collide with stock
+        // Ruffle's `<ruffle-object>` registration (customElements.define
+        // throws on duplicates).
         const externalName = registerElement(
-            "ruffle-object",
+            "dirplayer_ruffle-object",
             RuffleObjectElement,
         );
         const ruffleObj: RuffleObjectElement = document.createElement(

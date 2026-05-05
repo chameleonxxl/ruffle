@@ -582,7 +582,8 @@ export class InnerPlayer {
      * @private
      */
     private isUnusedFallbackObject(): boolean {
-        const element = lookupElement("ruffle-object");
+        // dirplayer-rs fork: tag names are namespaced under `dirplayer_`.
+        const element = lookupElement("dirplayer_ruffle-object");
 
         if (element !== null) {
             let parent = this.element.parentNode;
