@@ -21,15 +21,19 @@ function handleMessage(message: Message) {
             if (publicPath.protocol.includes("extension")) {
                 __webpack_public_path__ = publicPath.href;
             }
-            if (window.RufflePlayer === undefined) {
-                window.RufflePlayer = {};
+            // dirplayer-rs fork: the public API is namespaced under
+            // `dirplayer_RufflePlayer` (see core/src/public/setup/public-api.ts)
+            // so the fork's globals don't collide with stock Ruffle if both
+            // are on the same page.
+            if (window.dirplayer_RufflePlayer === undefined) {
+                window.dirplayer_RufflePlayer = {};
             }
-            if (window.RufflePlayer.config === undefined) {
-                window.RufflePlayer.config = {};
+            if (window.dirplayer_RufflePlayer.config === undefined) {
+                window.dirplayer_RufflePlayer.config = {};
             }
-            window.RufflePlayer.config = {
+            window.dirplayer_RufflePlayer.config = {
                 ...message.config,
-                ...window.RufflePlayer.config,
+                ...window.dirplayer_RufflePlayer.config,
                 openInNewTab,
             };
             setCurrentScriptURL(publicPath);

@@ -34,12 +34,16 @@ export function installRuffle(
     sourceName: string,
     options: InstallationOptions = {},
 ): void {
+    // Namespaced under dirplayer_ so the fork doesn't collide with stock
+    // Ruffle when both are loaded on the same page (e.g. via a browser
+    // extension). dirplayer-rs's selfhosted bundle is the only consumer of
+    // this global; stock Ruffle still owns the original `RufflePlayer` name.
     let publicAPI: PublicAPI;
-    if (window.RufflePlayer instanceof PublicAPI) {
-        publicAPI = window.RufflePlayer;
+    if (window.dirplayer_RufflePlayer instanceof PublicAPI) {
+        publicAPI = window.dirplayer_RufflePlayer;
     } else {
-        publicAPI = new PublicAPI(window.RufflePlayer);
-        window.RufflePlayer = publicAPI;
+        publicAPI = new PublicAPI(window.dirplayer_RufflePlayer);
+        window.dirplayer_RufflePlayer = publicAPI;
     }
 
     publicAPI.sources[sourceName] = internalSourceApi;

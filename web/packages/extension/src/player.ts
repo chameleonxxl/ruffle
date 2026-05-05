@@ -14,7 +14,11 @@ declare global {
 }
 
 Setup.installRuffle("local");
-const ruffle = (window.RufflePlayer as Setup.PublicAPI).newest()!;
+// dirplayer-rs fork: the public API is namespaced under
+// `dirplayer_RufflePlayer` (see ruffle/web/packages/core/src/public/setup/public-api.ts)
+// so the fork's globals don't collide with stock Ruffle if both are on the
+// same page.
+const ruffle = (window.dirplayer_RufflePlayer as Setup.PublicAPI).newest()!;
 let player: Player.PlayerElement;
 
 const playerContainer = document.getElementById("player-container")!;

@@ -28,7 +28,8 @@ export class Player extends React.Component<PlayerAttributes> {
     }
 
     componentDidMount() {
-        this.player = (window.RufflePlayer as Setup.PublicAPI)
+        // dirplayer-rs fork: namespaced under window.dirplayer_RufflePlayer.
+        this.player = (window.dirplayer_RufflePlayer as Setup.PublicAPI)
             .newest()!
             .createPlayer()!;
         this.player.id = "player";

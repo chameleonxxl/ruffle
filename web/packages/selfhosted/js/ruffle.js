@@ -43,8 +43,11 @@ function publicPath(config) {
     return path;
 }
 
+// dirplayer-rs fork: namespace under window.dirplayer_RufflePlayer to avoid
+// colliding with stock Ruffle if both bundles end up on the same page (e.g.
+// via a browser extension or another script tag).
 Setup.installRuffle("local", {
     onFirstLoad: () => {
-        __webpack_public_path__ = publicPath(window.RufflePlayer?.config);
+        __webpack_public_path__ = publicPath(window.dirplayer_RufflePlayer?.config);
     },
 });

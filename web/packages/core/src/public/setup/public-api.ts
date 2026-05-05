@@ -10,8 +10,13 @@ declare global {
          * This may be a config holder, which will be converted to a
          * {@link PublicAPI} via {@link installRuffle}, or an actual
          * {@link PublicAPI} instance itself.
+         *
+         * dirplayer-rs ships a fork of Ruffle and namespaces the global to
+         * avoid colliding with stock Ruffle if both are on the same page
+         * (e.g. via a browser extension). The original `RufflePlayer` global
+         * is intentionally not used here.
          */
-        RufflePlayer?: PublicAPILike | PublicAPI;
+        dirplayer_RufflePlayer?: PublicAPILike | PublicAPI;
     }
 }
 

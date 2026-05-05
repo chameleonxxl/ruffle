@@ -921,7 +921,7 @@ export class InnerPlayer {
                           )!,
                       }
                     : {}),
-                ...(window.RufflePlayer?.config ?? {}),
+                ...(window.dirplayer_RufflePlayer?.config ?? {}),
                 ...this.config,
                 ...options,
             };
@@ -2380,7 +2380,7 @@ export function workaroundYoutubeMixedContent(
     attr: string,
 ): void {
     const value = elem.getAttribute(attr);
-    const config = window.RufflePlayer?.config ?? {};
+    const config = window.dirplayer_RufflePlayer?.config ?? {};
     if (value) {
         try {
             const url = new URL(value);

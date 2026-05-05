@@ -6,7 +6,7 @@ import type { DataLoadOptions, URLLoadOptions } from "./public/config";
 import { isExtension } from "./current-script";
 
 const globalConfig: DataLoadOptions | URLLoadOptions | object =
-    window.RufflePlayer?.config ?? {};
+    window.dirplayer_RufflePlayer?.config ?? {};
 const jsScriptUrl = publicPath(globalConfig) + "ruffle.js";
 
 /**
@@ -164,24 +164,24 @@ async function injectRuffle(
     }
 
     if (!isExtension) {
-        if (!elementWindow.RufflePlayer) {
+        if (!elementWindow.dirplayer_RufflePlayer) {
             const script = elementDocument.createElement("script");
             script.setAttribute("src", jsScriptUrl);
             script.onload = () => {
                 // Inject parent configuration once the script is loaded, preventing it from being ignored.
-                elementWindow.RufflePlayer = {};
-                elementWindow.RufflePlayer.config = globalConfig;
+                elementWindow.dirplayer_RufflePlayer = {};
+                elementWindow.dirplayer_RufflePlayer.config = globalConfig;
             };
             elementDocument.head.appendChild(script);
         }
     } else {
-        if (!elementWindow.RufflePlayer) {
-            elementWindow.RufflePlayer = {};
+        if (!elementWindow.dirplayer_RufflePlayer) {
+            elementWindow.dirplayer_RufflePlayer = {};
         }
         // Merge parent window and frame configurations, will likely be applied too late though.
-        elementWindow.RufflePlayer.config = {
+        elementWindow.dirplayer_RufflePlayer.config = {
             ...globalConfig,
-            ...(elementWindow.RufflePlayer.config ?? {}),
+            ...(elementWindow.dirplayer_RufflePlayer.config ?? {}),
         };
     }
 }
