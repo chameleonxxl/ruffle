@@ -49,12 +49,17 @@ export function installRuffle(
     publicAPI.sources[sourceName] = internalSourceApi;
     internalSourceApi.options = options;
 
-    // Install the faux plugin detection immediately.
-    // This is necessary because scripts such as SWFObject check for the
-    // Flash Player immediately when they load.
-    // TODO: Maybe there's a better place for this.
+    // dirplayer-rs fork: polyfills default to *off*. Upstream Ruffle defaults
+    // them on so SWFObject-style detection (`navigator.plugins["Shockwave
+    // Flash"]`) and bare `<object>`/`<embed>` tags get auto-handled. In our
+    // fork that's exactly what we DON'T want — we're a private Flash backend
+    // for dirplayer-rs (which creates players explicitly via
+    // `ruffle.createPlayer()` and `.ruffle().load()`) and the page may also
+    // have stock Ruffle on it (e.g. via a browser extension) that should win
+    // any auto-detection. Pages that genuinely want our fork to polyfill can
+    // still opt in with `dirplayer_RufflePlayer.config.polyfills = true`.
     const polyfills =
-        "polyfills" in publicAPI.config ? publicAPI.config.polyfills : true;
+        "polyfills" in publicAPI.config ? publicAPI.config.polyfills : false;
     if (polyfills !== false) {
         internalSourceApi.pluginPolyfill();
     }

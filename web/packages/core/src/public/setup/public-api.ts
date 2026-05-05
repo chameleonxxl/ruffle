@@ -143,8 +143,14 @@ export class PublicAPI implements PublicAPILike {
                 throw new Error("No registered Ruffle source!");
             }
 
+            // dirplayer-rs fork: default to off — see install.ts for the
+            // rationale. The fork should never auto-polyfill `<object>` /
+            // `<embed>` SWF tags on the page; dirplayer-rs creates Flash
+            // players explicitly via `ruffle.createPlayer()`, and any
+            // unrelated SWFs on the page should be left for stock Ruffle (or
+            // a real Flash player) to handle.
             const polyfills =
-                "polyfills" in this.config ? this.config.polyfills : true;
+                "polyfills" in this.config ? this.config.polyfills : false;
             if (polyfills !== false) {
                 this.sources[this.newestName]!.polyfill();
             }
