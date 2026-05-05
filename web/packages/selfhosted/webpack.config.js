@@ -21,9 +21,15 @@ export default function (_env, _argv) {
         entry: "./js/ruffle.js",
         output: {
             path: url.fileURLToPath(new URL("dist", import.meta.url)),
-            filename: "ruffle.js",
+            // dirplayer-rs fork: rename the loader and chunks so they don't
+            // collide with stock Ruffle's `ruffle.js` / `core.ruffle.*.js` if
+            // another copy is on the same page (e.g. via a browser extension).
+            // The HTML/script-tag references that load this file have been
+            // updated to match (see public/index.html, the polyfill, and
+            // index-dirplayer.html).
+            filename: "dirplayer_ruffle.js",
             publicPath: "",
-            chunkFilename: "core.ruffle.[contenthash].js",
+            chunkFilename: "dirplayer_core.ruffle.[contenthash].js",
             clean: true,
         },
         performance: {

@@ -7,7 +7,12 @@ import { isExtension } from "./current-script";
 
 const globalConfig: DataLoadOptions | URLLoadOptions | object =
     window.dirplayer_RufflePlayer?.config ?? {};
-const jsScriptUrl = publicPath(globalConfig) + "ruffle.js";
+// dirplayer-rs fork: the loader is renamed to dirplayer_ruffle.js so it
+// doesn't collide with stock Ruffle on the same page. This URL is what the
+// iframe / sub-frame polyfill injects via <script src=...> when it
+// encounters Flash inside another window — must match the actual filename
+// produced by selfhosted/webpack.config.js.
+const jsScriptUrl = publicPath(globalConfig) + "dirplayer_ruffle.js";
 
 /**
  * Polyfill native Flash elements with Ruffle equivalents.
