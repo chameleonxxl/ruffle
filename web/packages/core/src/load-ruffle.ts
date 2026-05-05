@@ -113,13 +113,20 @@ async function fetchRuffle(
 
     await init({ module_or_path: response });
 
-    const { ruffleRegisterLingoCallback } = await (extensionsSupported
+    // dirplayer-rs fork: the WASM export is renamed to
+    // `dirplayer_ruffleRegisterLingoCallback` (see ruffle/web/src/lib.rs and
+    // the matching extern import in vm-rust/src/.../sprite.rs) so the fork
+    // doesn't collide with stock Ruffle on the same page. Import under the
+    // new name and expose it on window so dirplayer-rs's WASM (which calls
+    // `js_sys::Reflect::get(&window, "dirplayer_ruffleRegisterLingoCallback")`)
+    // can find it.
+    const { dirplayer_ruffleRegisterLingoCallback } = await (extensionsSupported
         ? import("../dist/ruffle_web")
         : // @ts-expect-error TS2307 TypeScript compiler is trying to do the import.
           import("../dist/%FALLBACK_WASM%"));
 
-    (window as any).ruffleRegisterLingoCallback = ruffleRegisterLingoCallback;
-    console.log("✅ ruffleRegisterLingoCallback exposed globally.");
+    (window as any).dirplayer_ruffleRegisterLingoCallback = dirplayer_ruffleRegisterLingoCallback;
+    console.log("✅ dirplayer_ruffleRegisterLingoCallback exposed globally.");
 
     return [RuffleInstanceBuilder, ZipWriter];
 }

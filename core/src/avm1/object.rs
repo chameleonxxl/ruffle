@@ -102,9 +102,13 @@ pub fn external_to_js_value(external: ExternalValue) -> JsValue {
     }
 }
 
+// dirplayer-rs exposes this JS-side trampoline under the dirplayer_ prefix
+// so the fork's globals don't collide with stock Ruffle if both are loaded
+// on the same page. Matching JS-side definition lives in
+// src/services/flashPlayerManager.ts::initFlashBridge.
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(js_name = "triggerLingoCallbackOnScript")]
+    #[wasm_bindgen(js_name = "dirplayer_triggerLingoCallbackOnScript")]
     fn trigger_lingo_callback_on_script(
         cast_lib: i32,
         cast_member: i32,

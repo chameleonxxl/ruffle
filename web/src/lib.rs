@@ -44,7 +44,10 @@ use web_sys::{
 };
 use ruffle_core::{LingoCallback, LINGO_CALLBACKS};
 
-#[wasm_bindgen(js_name = "ruffleRegisterLingoCallback")]
+// dirplayer-rs exposes this under the dirplayer_ prefix so the fork's
+// globals don't collide with stock Ruffle when both are on the same page.
+// Matching JS-side caller is in src/services/flashPlayerManager.ts.
+#[wasm_bindgen(js_name = "dirplayer_ruffleRegisterLingoCallback")]
 pub fn ruffle_register_lingo_callback(
     movie_clip_path: String,
     method_name: String,
