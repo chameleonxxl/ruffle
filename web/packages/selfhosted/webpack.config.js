@@ -18,7 +18,13 @@ export default function (_env, _argv) {
 
     return {
         mode,
-        entry: "./js/ruffle.js",
+        // dirplayer-rs fork: prepend a tiny entry that lets the host set
+        // webpack's chunk publicPath at runtime. Used by the extension's
+        // service worker to point chunk URLs at chrome-extension://.../ruffle/
+        // when the bundle is injected via chrome.scripting (where
+        // `document.currentScript` is null and webpack's default
+        // detection falls back to the page URL).
+        entry: ["./js/dirplayer-runtime-public-path.js", "./js/ruffle.js"],
         output: {
             path: url.fileURLToPath(new URL("dist", import.meta.url)),
             // dirplayer-rs fork: rename the loader and chunks so they don't
