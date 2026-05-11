@@ -36,6 +36,16 @@ export default function (_env, _argv) {
             filename: "dirplayer_ruffle.js",
             publicPath: "",
             chunkFilename: "dirplayer_core.ruffle.[contenthash].js",
+            // dirplayer-rs fork: webpack derives runtime globals like
+            // `webpackChunk${uniqueName}` from the package name by default,
+            // which is `ruffle-selfhosted` — identical to stock Ruffle. On
+            // pages where stock Ruffle is already loaded (e.g. the Wayback
+            // Machine ships its own at `web-static.archive.org/_static/js/
+            // ruffle/`), our chunks .push() into stock Ruffle's chunk queue
+            // and dynamic imports (including the WASM core) get routed
+            // through its webpack runtime — so our `.load()` hangs forever.
+            // Setting a fork-specific uniqueName isolates both runtimes.
+            uniqueName: "dirplayer_ruffle_selfhosted",
             clean: true,
         },
         performance: {
