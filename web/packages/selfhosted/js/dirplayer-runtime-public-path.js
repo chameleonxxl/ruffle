@@ -33,3 +33,14 @@ if (typeof document !== "undefined") {
         __webpack_public_path__ = url;
     }
 }
+
+// dirplayer-rs fork: snapshot the original `fetch` as early as possible so
+// subsequent pages that monkey-patch it (e.g. the Wayback Machine's
+// `wombat.js`, which rewrites every URL through its playback proxy) can't
+// hijack our WASM fetch from the `chrome-extension://` extension URL. This
+// runs as the first webpack module, before Ruffle's own code does any
+// network I/O. `load-ruffle.ts` reads back from this global instead of
+// calling `window.fetch` directly.
+if (typeof window !== "undefined" && typeof window.fetch === "function" && !window.__dirplayerOrigFetch) {
+    window.__dirplayerOrigFetch = window.fetch.bind(window);
+}

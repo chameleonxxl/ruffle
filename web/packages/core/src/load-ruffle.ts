@@ -60,19 +60,38 @@ async function fetchRuffle(
 
     // Note: The argument passed to import() has to be a simple string literal,
     // otherwise some bundler will get confused and won't include the module?
+    //
+    // dirplayer-rs fork: `webpackMode: "eager"` inlines the chunk into the
+    // main bundle instead of producing a separate `dirplayer_core.ruffle.
+    // {hash}.js`. Pages that monkey-patch HTMLScriptElement.src in the main
+    // world (notably the Wayback Machine's `wombat.js`, which rewrites every
+    // URL through its playback proxy) silently break webpack's jsonp chunk
+    // loader — the chunk request 404s with no error surfaced, and our
+    // `bridgeCallMethod(..., "load", ...)` then hangs forever waiting for
+    // the WASM init that never starts. Inlining bypasses the script-tag
+    // path entirely; the bundle gets bigger but loads reliably.
     const {
         default: init,
         RuffleInstanceBuilder,
         ZipWriter,
     } = await (extensionsSupported
-        ? import("../dist/ruffle_web")
+        ? import(/* webpackMode: "eager" */ "../dist/ruffle_web")
         : // @ts-expect-error TS2307 TypeScript compiler is trying to do the import.
-          import("../dist/%FALLBACK_WASM%"));
+          import(/* webpackMode: "eager" */ "../dist/%FALLBACK_WASM%"));
     let response;
     const wasmUrl = extensionsSupported
         ? new URL("../dist/ruffle_web_bg.wasm", import.meta.url)
         : new URL("../dist/%FALLBACK_WASM%_bg.wasm", import.meta.url);
-    const wasmResponse = await fetch(wasmUrl);
+    // dirplayer-rs fork: prefer the pre-wombat `fetch` snapshot taken by
+    // `dirplayer-runtime-public-path.js` (first webpack entry). On the
+    // Wayback Machine, wombat.js wraps window.fetch and rewrites every URL
+    // through its playback proxy — including our `chrome-extension://`
+    // WASM URL, which then 404s. The snapshot was captured before wombat
+    // had a chance to overwrite `fetch`, so it goes straight to the
+    // browser's real fetch.
+    const rawFetch = (typeof window !== "undefined"
+        && (window as any).__dirplayerOrigFetch) || fetch;
+    const wasmResponse = await rawFetch(wasmUrl);
     // The Pale Moon browser lacks full support for ReadableStream.
     // However, ReadableStream itself is defined.
     const readableStreamProperlyDefined =
@@ -121,9 +140,9 @@ async function fetchRuffle(
     // `js_sys::Reflect::get(&window, "dirplayer_ruffleRegisterLingoCallback")`)
     // can find it.
     const { dirplayer_ruffleRegisterLingoCallback } = await (extensionsSupported
-        ? import("../dist/ruffle_web")
+        ? import(/* webpackMode: "eager" */ "../dist/ruffle_web")
         : // @ts-expect-error TS2307 TypeScript compiler is trying to do the import.
-          import("../dist/%FALLBACK_WASM%"));
+          import(/* webpackMode: "eager" */ "../dist/%FALLBACK_WASM%"));
 
     (window as any).dirplayer_ruffleRegisterLingoCallback = dirplayer_ruffleRegisterLingoCallback;
     console.log("✅ dirplayer_ruffleRegisterLingoCallback exposed globally.");
