@@ -722,9 +722,13 @@ impl RuffleInstanceBuilder {
             let mut core = core
                 .lock()
                 .expect("Failed to lock player after construction");
-            <dyn Any>::downcast_mut::<WebNavigatorBackend>(core.navigator_mut())
-                .expect("Expected WebNavigatorBackend")
-                .set_player(player_weak);
+            let navigator = <dyn Any>::downcast_mut::<WebNavigatorBackend>(core.navigator_mut())
+                .expect("Expected WebNavigatorBackend");
+            navigator.set_player(player_weak);
+            // dirplayer fork: hand the JS-side player handle to the navigator
+            // so Director's `getURL("event: …")` calls can be routed back into
+            // the host page's Lingo dispatch (see WebNavigatorBackend::js_player).
+            navigator.set_js_player(js_player.clone());
             // Set config parameters.
             core.set_volume(self.volume);
             core.set_background_color(self.background_color);

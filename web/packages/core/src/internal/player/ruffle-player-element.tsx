@@ -59,6 +59,19 @@ export class RufflePlayerElement extends HTMLElement implements PlayerElement {
         });
     }
 
+    /**
+     * dirplayer fork: forward `dirplayer_addOpenUrlHandler` to the inner
+     * player so flashPlayerManager.ts (which only sees the Web Component
+     * element returned by `dirplayer_RufflePlayer.newest()`) can register
+     * its `event:` URL handler. Stock callers won't see this method —
+     * keeps Director's getURL routing isolated to the dirplayer fork.
+     */
+    dirplayer_addOpenUrlHandler(
+        handler: (url: string, target: string) => boolean,
+    ): void {
+        this.#inner.dirplayer_addOpenUrlHandler(handler);
+    }
+
     ruffle<V extends keyof APIVersions = 1>(version?: V): APIVersions[V] {
         const v = version ?? 1;
         if (v === 1) {

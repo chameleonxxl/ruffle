@@ -211,6 +211,20 @@ export class InnerPlayer {
     private readonly onFSCommand: ((command: string, args: string) => void)[] =
         [];
 
+    /**
+     * dirplayer fork: handlers registered via `dirplayer_addOpenUrlHandler`.
+     * Director's Flash Asset Xtra intercepts `getURL("event: …")` URLs and
+     * routes them into the host movie's Lingo event chain instead of
+     * navigating the browser. Our patched WebNavigatorBackend calls back
+     * here via `dirplayerCallOpenUrl`; if any handler returns true, the
+     * navigator skips the rest of `navigate_to_url` (no popup, no deny
+     * warning). Plain Ruffle never registers a handler — the array stays
+     * empty, `dirplayerCallOpenUrl` returns false, and the existing
+     * openUrlMode behaviour applies unchanged.
+     */
+    private readonly dirplayerOpenUrlHandlers: ((url: string, target: string) => boolean)[] =
+        [];
+
     public constructor(
         element: HTMLElement,
         debugPlayerInfo: () => string,
@@ -353,6 +367,40 @@ export class InnerPlayer {
             handler(command, args);
         }
         return true;
+    }
+
+    /**
+     * dirplayer fork: register a handler for `getURL("event: …")` URLs.
+     * Each handler receives the raw URL (e.g. `event: send #done`) and
+     * the SWF-supplied target. Returning true claims the navigation; the
+     * navigator backend will then skip its normal openUrlMode flow.
+     *
+     * The `dirplayer_` prefix mirrors other fork-only globals
+     * (`dirplayer_RufflePlayer`, `dirplayer_ruffleRegisterLingoCallback`)
+     * so the API can't collide with anything stock Ruffle adds later.
+     */
+    dirplayer_addOpenUrlHandler(
+        handler: (url: string, target: string) => boolean,
+    ) {
+        this.dirplayerOpenUrlHandlers.push(handler);
+    }
+
+    /**
+     * dirplayer fork: invoked from WebNavigatorBackend::navigate_to_url
+     * (via the wasm-bindgen `dirplayerCallOpenUrl` extern). Returns true
+     * as soon as any registered handler claims the URL.
+     */
+    public dirplayerCallOpenUrl(url: string, target: string): boolean {
+        for (const handler of this.dirplayerOpenUrlHandlers) {
+            try {
+                if (handler(url, target)) {
+                    return true;
+                }
+            } catch (e) {
+                console.warn("dirplayer open-url handler threw:", e);
+            }
+        }
+        return false;
     }
 
     /**

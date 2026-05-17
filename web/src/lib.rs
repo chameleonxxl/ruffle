@@ -200,6 +200,18 @@ unsafe extern "C" {
     fn call_fs_command(this: &JavascriptPlayer, command: &str, args: &str)
     -> Result<bool, JsValue>;
 
+    /// dirplayer fork hook: route Director's `getURL("event: …")` URLs
+    /// (which bypass the normal navigation backend) into the JS host so the
+    /// host movie's Lingo dispatch can handle them. Returns true if the JS
+    /// side took over; false leaves the navigator's normal openUrlMode logic
+    /// to deny / confirm / allow as configured.
+    #[wasm_bindgen(method, catch, js_name = "dirplayerCallOpenUrl")]
+    fn dirplayer_call_open_url(
+        this: &JavascriptPlayer,
+        url: &str,
+        target: &str,
+    ) -> Result<bool, JsValue>;
+
     #[wasm_bindgen(method)]
     fn panic(this: &JavascriptPlayer, error: &JsError);
 

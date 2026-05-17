@@ -1,5 +1,5 @@
 //! Navigator backend for web
-use crate::SocketProxy;
+use crate::{JavascriptPlayer, SocketProxy};
 use async_channel::{Receiver, Sender};
 use futures_util::future::Either;
 use futures_util::{SinkExt, StreamExt, future};
@@ -59,6 +59,13 @@ pub struct WebNavigatorBackend {
     socket_proxies: Vec<SocketProxy>,
     credential_allow_list: Vec<String>,
     player: Weak<Mutex<Player>>,
+    /// JS-side player handle used for the dirplayer-fork "open URL" callback.
+    /// dirplayer routes Director's Flash Asset Xtra `event:` URLs back into
+    /// the host movie's Lingo dispatch instead of opening a real browser tab.
+    /// Set by the builder right after `set_player`. Plain Ruffle is unaffected
+    /// — without a registered handler on the JS side, the call returns false
+    /// and we fall through to the normal openUrlMode path.
+    js_player: Option<JavascriptPlayer>,
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -118,12 +125,20 @@ impl WebNavigatorBackend {
             socket_proxies,
             credential_allow_list,
             player: Weak::new(),
+            js_player: None,
         }
     }
 
     /// We need to set the player after construction because the player is created after the navigator.
     pub fn set_player(&mut self, player: Weak<Mutex<Player>>) {
         self.player = player;
+    }
+
+    /// Plumb in the JS-side player handle (dirplayer fork). Used by
+    /// `navigate_to_url` to route `event:` URLs back into the host page's
+    /// Director runtime; called by the builder after the JS player is bound.
+    pub fn set_js_player(&mut self, js_player: JavascriptPlayer) {
+        self.js_player = Some(js_player);
     }
 
     /// Try to rewrite the URL using URL rewrite rules.
@@ -186,6 +201,22 @@ impl NavigatorBackend for WebNavigatorBackend {
     ) {
         // If the URL is empty, ignore the request.
         if url.is_empty() {
+            return;
+        }
+
+        // dirplayer fork: Director's Flash Asset Xtra intercepts
+        // `getURL("event: …")` and feeds the body into the host movie's
+        // Lingo event chain (`event: send #done` fires `on done`). Hand
+        // matching URLs to the JS-side handler before resolve_url touches
+        // them — the `event:` scheme isn't a real URL and would parse as
+        // garbage. If the JS side reports the call as handled, skip the
+        // rest of navigate_to_url so no popup or denial warning fires.
+        if url.starts_with("event:")
+            && let Some(js_player) = self.js_player.as_ref()
+            && js_player
+                .dirplayer_call_open_url(url, target)
+                .unwrap_or(false)
+        {
             return;
         }
 
