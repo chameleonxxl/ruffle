@@ -72,6 +72,20 @@ export class RufflePlayerElement extends HTMLElement implements PlayerElement {
         this.#inner.dirplayer_addOpenUrlHandler(handler);
     }
 
+    /**
+     * dirplayer fork: forward `dirplayer_dispatchPointer` to the inner
+     * player so flashPlayerManager.ts can inject Director-side clicks
+     * straight into Ruffle's input pipeline. See InnerPlayer for why
+     * synthesised DOM PointerEvents don't suffice.
+     */
+    dirplayer_dispatchPointer(
+        type: "down" | "up" | "move",
+        localX: number,
+        localY: number,
+    ): boolean {
+        return this.#inner.dirplayer_dispatchPointer(type, localX, localY);
+    }
+
     ruffle<V extends keyof APIVersions = 1>(version?: V): APIVersions[V] {
         const v = version ?? 1;
         if (v === 1) {

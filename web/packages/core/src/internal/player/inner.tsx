@@ -386,6 +386,30 @@ export class InnerPlayer {
     }
 
     /**
+     * dirplayer fork: directly inject a synthetic mouse event into the
+     * underlying Ruffle WASM core, bypassing the canvas's DOM event
+     * listeners. dirplayer-rs uses this to forward Director-side clicks
+     * into the SWF when Ruffle's canvas is hidden offscreen — synthesised
+     * DOM PointerEvents are silently dropped (likely by Ruffle's pointer
+     * capture and offscreen handling), but going straight to the WASM
+     * input pipeline works.
+     *
+     * `type` is "down", "up", or "move"; `localX/Y` are in canvas pixels.
+     * Returns true if the player processed the event, false if no
+     * Ruffle instance is bound yet.
+     */
+    public dirplayer_dispatchPointer(
+        type: "down" | "up" | "move",
+        localX: number,
+        localY: number,
+    ): boolean {
+        if (!this.instance) return false;
+        return (this.instance as unknown as {
+            dirplayerDispatchPointer: (t: string, x: number, y: number) => boolean;
+        }).dirplayerDispatchPointer(type, localX, localY);
+    }
+
+    /**
      * dirplayer fork: invoked from WebNavigatorBackend::navigate_to_url
      * (via the wasm-bindgen `dirplayerCallOpenUrl` extern). Returns true
      * as soon as any registered handler claims the URL.

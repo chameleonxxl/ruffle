@@ -363,6 +363,43 @@ impl RuffleHandle {
         });
     }
 
+    /// dirplayer fork: directly inject a synthetic mouse event into the
+    /// player's input pipeline, bypassing DOM event dispatch. Used by
+    /// dirplayer-rs's mouseDown/mouseUp handlers to forward Director-side
+    /// clicks into the SWF when Ruffle's canvas is hidden offscreen and
+    /// would never otherwise see real browser events. Stock callers don't
+    /// need this — DOM-dispatched PointerEvents reach the canvas listener
+    /// directly. The `dirplayer_` prefix keeps it isolated from any future
+    /// upstream input API.
+    ///
+    /// `event_type` is "down", "up", or "move". Coordinates are in canvas
+    /// pixels (already scaled for device pixel ratio by the caller).
+    #[wasm_bindgen(js_name = "dirplayerDispatchPointer")]
+    pub fn dirplayer_dispatch_pointer(
+        &self,
+        event_type: &str,
+        x: f64,
+        y: f64,
+    ) -> bool {
+        let event = match event_type {
+            "down" => ruffle_core::PlayerEvent::MouseDown {
+                x,
+                y,
+                button: MouseButton::Left,
+                index: None,
+            },
+            "up" => ruffle_core::PlayerEvent::MouseUp {
+                x,
+                y,
+                button: MouseButton::Left,
+            },
+            "move" => ruffle_core::PlayerEvent::MouseMove { x, y },
+            _ => return false,
+        };
+        self.with_core_mut(|core| core.handle_event(event))
+            .unwrap_or(false)
+    }
+
     pub fn pause(&self) {
         let _ = self.with_core_mut(|core| {
             core.set_is_playing(false);
