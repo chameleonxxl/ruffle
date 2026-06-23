@@ -410,6 +410,25 @@ export class InnerPlayer {
     }
 
     /**
+     * dirplayer fork: classify what's under a sprite-local canvas point,
+     * mirroring Director's Flash `sprite.hitTest(point)`. dirplayer-rs uses
+     * this for both `sprite.hitTest()` and `sprite.mouseOverButton`. The WASM
+     * core injects a synthetic MouseMove to refresh hover state (the offscreen
+     * player sees no real motion), then reads the resolved cursor + a stage
+     * shape pick.
+     *
+     * `localX/Y` are in canvas pixels. Returns `0` = `#background`,
+     * `1` = `#normal`, `2` = `#button`, `3` = `#editText`; `0` if no Ruffle
+     * instance is bound yet.
+     */
+    public dirplayer_hitTest(localX: number, localY: number): number {
+        if (!this.instance) return 0;
+        return (this.instance as unknown as {
+            dirplayerHitTest: (x: number, y: number) => number;
+        }).dirplayerHitTest(localX, localY);
+    }
+
+    /**
      * dirplayer fork: invoked from WebNavigatorBackend::navigate_to_url
      * (via the wasm-bindgen `dirplayerCallOpenUrl` extern). Returns true
      * as soon as any registered handler claims the URL.

@@ -86,6 +86,16 @@ export class RufflePlayerElement extends HTMLElement implements PlayerElement {
         return this.#inner.dirplayer_dispatchPointer(type, localX, localY);
     }
 
+    /**
+     * dirplayer fork: forward `dirplayer_hitTest` to the inner player so
+     * flashPlayerManager.ts can classify what's under a point — driving
+     * Director's `sprite.hitTest()` and `sprite.mouseOverButton`. Returns
+     * `0` = `#background`, `1` = `#normal`, `2` = `#button`, `3` = `#editText`.
+     */
+    dirplayer_hitTest(localX: number, localY: number): number {
+        return this.#inner.dirplayer_hitTest(localX, localY);
+    }
+
     ruffle<V extends keyof APIVersions = 1>(version?: V): APIVersions[V] {
         const v = version ?? 1;
         if (v === 1) {

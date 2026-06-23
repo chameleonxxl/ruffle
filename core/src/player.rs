@@ -29,8 +29,8 @@ use crate::context_menu::{
 };
 use crate::display_object::Avm2MousePick;
 use crate::display_object::{
-    EditText, InteractiveObject, Stage, StageAlign, StageDisplayState, StageScaleMode,
-    TInteractiveObject, WindowMode,
+    EditText, HitTestOptions, InteractiveObject, Stage, StageAlign, StageDisplayState,
+    StageScaleMode, TDisplayObject, TInteractiveObject, WindowMode,
 };
 use crate::events::GamepadButton;
 use crate::events::PlayerNotification;
@@ -623,6 +623,39 @@ impl Player {
 
     pub fn set_mouse_in_stage(&mut self, is_in: bool) {
         self.mouse_in_stage = is_in;
+    }
+
+    /// dirplayer fork: classify what's under a viewport-pixel point, mirroring
+    /// Director's Flash `sprite.hitTest()` return values: `0` = `#background`,
+    /// `1` = `#normal`, `2` = `#button`, `3` = `#editText`. Drives both
+    /// `sprite.hitTest()` (the full classification) and `sprite.mouseOverButton`
+    /// (true iff the result is `#button`).
+    ///
+    /// dirplayer renders this player offscreen and only captures its frames —
+    /// it never routes live pointer motion here. So we inject a synthetic
+    /// MouseMove at the point to refresh hover/cursor state, then read the
+    /// resolved cursor: `Hand` over a button (or button-mode clip), `IBeam`
+    /// over an editable text field. When neither, we shape-pick the stage at
+    /// the resolved point to separate `#normal` (over rendered art) from
+    /// `#background` (empty). This self-syncs on every call, so it is correct
+    /// even when polled from `enterFrame` with no click in flight.
+    pub fn dirplayer_hit_classify(&mut self, x: f64, y: f64) -> u8 {
+        self.handle_event(PlayerEvent::MouseMove { x, y });
+        if !self.mouse_in_stage {
+            return 0; // #background — outside the SWF stage bounds
+        }
+        match self.mouse_cursor {
+            MouseCursor::Hand => 2,  // #button
+            MouseCursor::IBeam => 3, // #editText
+            _ => {
+                let point = self.mouse_position;
+                let hit = self.mutate_with_update_context(|context| {
+                    let stage = context.stage;
+                    stage.hit_test_shape(context, point, HitTestOptions::AVM_HIT_TEST)
+                });
+                if hit { 1 } else { 0 } // #normal / #background
+            }
+        }
     }
 
     /// Returns the master volume of the player. 1.0 is 100% volume.

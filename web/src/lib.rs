@@ -400,6 +400,27 @@ impl RuffleHandle {
             .unwrap_or(false)
     }
 
+    /// dirplayer fork: classify what's under a sprite-local point, mirroring
+    /// Director's Flash `sprite.hitTest(point)` return values. Drives both
+    /// `sprite.hitTest()` (the full classification) and `sprite.mouseOverButton`
+    /// (true iff the result is `#button`).
+    ///
+    /// Returns: `0` = `#background`, `1` = `#normal`, `2` = `#button`,
+    /// `3` = `#editText`.
+    ///
+    /// The offscreen player never receives real pointer motion, so we first
+    /// inject a synthetic MouseMove to refresh hover/cursor state, then read
+    /// the resolved mouse cursor — `Hand` over a button, `IBeam` over an
+    /// editable text field. When neither, we shape-pick the stage at the
+    /// resolved point to separate `#normal` (over rendered art) from
+    /// `#background` (empty). Coordinates are canvas pixels, the same space as
+    /// `dirplayerDispatchPointer`.
+    #[wasm_bindgen(js_name = "dirplayerHitTest")]
+    pub fn dirplayer_hit_test(&self, x: f64, y: f64) -> u8 {
+        self.with_core_mut(|core| core.dirplayer_hit_classify(x, y))
+            .unwrap_or(0)
+    }
+
     pub fn pause(&self) {
         let _ = self.with_core_mut(|core| {
             core.set_is_playing(false);
