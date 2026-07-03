@@ -204,14 +204,20 @@ impl NavigatorBackend for WebNavigatorBackend {
             return;
         }
 
-        // dirplayer fork: Director's Flash Asset Xtra intercepts
-        // `getURL("event: …")` and feeds the body into the host movie's
-        // Lingo event chain (`event: send #done` fires `on done`). Hand
-        // matching URLs to the JS-side handler before resolve_url touches
-        // them — the `event:` scheme isn't a real URL and would parse as
-        // garbage. If the JS side reports the call as handled, skip the
-        // rest of navigate_to_url so no popup or denial warning fires.
-        if url.starts_with("event:")
+        // dirplayer fork: Director's Flash Asset Xtra intercepts two custom
+        // getURL schemes and routes both into the host movie instead of the
+        // browser:
+        //   - `event: …`  → feeds the body into the Lingo event chain
+        //                   (`event: send #done` fires `on done`).
+        //   - `lingo: …`  → runs the body as a Lingo command (`do "…"`),
+        //                   e.g. pengapop's titleScreen Play button does
+        //                   `getURL("lingo:startGameTimed", "")`.
+        // Hand matching URLs to the JS-side handler before resolve_url
+        // touches them — neither scheme is a real URL and would parse as
+        // garbage (and fall through to the openUrlMode deny/confirm flow).
+        // If the JS side reports the call as handled, skip the rest of
+        // navigate_to_url so no popup or denial warning fires.
+        if (url.starts_with("event:") || url.starts_with("lingo:"))
             && let Some(js_player) = self.js_player.as_ref()
             && js_player
                 .dirplayer_call_open_url(url, target)
