@@ -574,10 +574,16 @@ pub fn search_prototype<'gc>(
     let orig_proto = proto;
 
     while let Value::Object(p) = proto {
-        // Surgical fix for Ruffle bug: Reduce recursion limit to prevent LoginServlet/StatusServlet
-        // circular reference between sBaseURI and sBaseUri properties
-        if depth == 10 {
-            return Ok(None); // Return None instead of error to allow graceful fallback
+        // Bounded prototype-chain traversal: return None ("not found", graceful)
+        // rather than erroring on a runaway/circular chain. 255 matches upstream
+        // Ruffle's limit and is high enough for real AS2 class hierarchies. The
+        // previous `depth == 10` cap was too aggressive — it starved legitimate
+        // deep class lookups (e.g. Neopets' `np.lang.Translator`), so
+        // `new np.lang.Translator()` constructed Undefined and the preloader's
+        // login links never rendered. A short circular reference (e.g.
+        // LoginServlet/StatusServlet sBaseURI<->sBaseUri) still terminates here.
+        if depth == 255 {
+            return Ok(None);
         }
 
         if let Some(getter) = p.getter(name, activation)

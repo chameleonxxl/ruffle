@@ -1702,11 +1702,6 @@ impl<'a, 'gc> Activation<'a, 'gc> {
                 // Construct `this[method_name]`.
                 constructor.construct(self, &args)?
             } else {
-                avm_warn!(
-                    self,
-                    "Tried to construct with non-object constructor {:?}",
-                    constructor
-                );
                 Value::Undefined
             }
         };
