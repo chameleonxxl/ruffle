@@ -573,15 +573,30 @@ pub fn search_prototype<'gc>(
     let mut depth = 0;
     let orig_proto = proto;
 
+    // Cycle detection for circular prototype chains. Coke Studios' SF gateway
+    // builds objects whose prototype chain loops (LoginServlet/StatusServlet ->
+    // XMLManager + __resolve proxies), so a lookup for a missing property (e.g.
+    // sBaseUri vs sBaseURI) walks forever, executing a chain getter at every
+    // level — the movie hangs. Rather than the old blunt `depth == 10` cap
+    // (which also starved legitimate DEEP but ACYCLIC chains like Neopets'
+    // `np.lang.Translator`, so `new np.lang.Translator()` built Undefined and
+    // the DGS login links never rendered), stop as soon as a prototype REPEATS.
+    // The visited set is only populated past a small depth so ordinary shallow
+    // lookups (the overwhelming majority) pay nothing.
+    const CYCLE_TRACK_DEPTH: u8 = 16;
+    let mut visited: Vec<Object<'gc>> = Vec::new();
+
     while let Value::Object(p) = proto {
-        // Bounded prototype-chain traversal: return None ("not found", graceful)
-        // rather than erroring on a runaway/circular chain. 255 matches upstream
-        // Ruffle's limit and is high enough for real AS2 class hierarchies. The
-        // previous `depth == 10` cap was too aggressive — it starved legitimate
-        // deep class lookups (e.g. Neopets' `np.lang.Translator`), so
-        // `new np.lang.Translator()` constructed Undefined and the preloader's
-        // login links never rendered. A short circular reference (e.g.
-        // LoginServlet/StatusServlet sBaseURI<->sBaseUri) still terminates here.
+        if depth >= CYCLE_TRACK_DEPTH {
+            if visited.iter().any(|v| Object::ptr_eq(*v, p)) {
+                // Circular prototype chain — treat as "not found" (graceful),
+                // matching the runaway-chain fallback below.
+                return Ok(None);
+            }
+            visited.push(p);
+        }
+        // Backstop for a non-circular runaway chain. 255 matches upstream
+        // Ruffle and comfortably covers real AS2 class hierarchies.
         if depth == 255 {
             return Ok(None);
         }
