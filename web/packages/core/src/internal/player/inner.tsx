@@ -386,6 +386,21 @@ export class InnerPlayer {
     }
 
     /**
+     * dirplayer fork: register an `fscommand` handler under a namespaced name.
+     * Stock Ruffle's `addFSCommandHandler` is unprefixed, so binding to it from
+     * flashPlayerManager risks attaching to a STOCK Ruffle player that happens
+     * to share the page (archive.org runs stock Ruffle + wombat). This alias —
+     * like `dirplayer_addOpenUrlHandler` — exists only on the fork, so dirplayer
+     * binds only to its own player. Additive (`onFSCommand.push`), so it
+     * coexists with the element's own legacy ExternalInterface forwarder.
+     */
+    dirplayer_addFSCommandHandler(
+        handler: (command: string, args: string) => void,
+    ) {
+        this.addFSCommandHandler(handler);
+    }
+
+    /**
      * dirplayer fork: directly inject a synthetic mouse event into the
      * underlying Ruffle WASM core, bypassing the canvas's DOM event
      * listeners. dirplayer-rs uses this to forward Director-side clicks

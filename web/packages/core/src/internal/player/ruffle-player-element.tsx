@@ -73,6 +73,20 @@ export class RufflePlayerElement extends HTMLElement implements PlayerElement {
     }
 
     /**
+     * dirplayer fork: forward `dirplayer_addFSCommandHandler` to the inner
+     * player so flashPlayerManager.ts (which only sees the element) can register
+     * a namespaced fscommand handler. The element exposes GetVariable/CallFunction
+     * directly but NOT `addFSCommandHandler` (that lives behind `.ruffle()`), so
+     * this is the reliable Flash→Director fscommand entry point. Stock callers
+     * won't see this method — keeps the routing isolated to the dirplayer fork.
+     */
+    dirplayer_addFSCommandHandler(
+        handler: (command: string, args: string) => void,
+    ): void {
+        this.#inner.dirplayer_addFSCommandHandler(handler);
+    }
+
+    /**
      * dirplayer fork: forward `dirplayer_dispatchPointer` to the inner
      * player so flashPlayerManager.ts can inject Director-side clicks
      * straight into Ruffle's input pipeline. See InnerPlayer for why
