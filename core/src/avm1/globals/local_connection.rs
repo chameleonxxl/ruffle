@@ -15,6 +15,27 @@ use gc_arena::{Collect, Gc};
 use ruffle_macros::istr;
 use std::cell::RefCell;
 
+// dirplayer fork: forward every LocalConnection.send() to dirplayer (if present)
+// so a Director-created LocalConnection receiver — connected via Lingo
+// `pLC.connect(name)` on a `newObject("LocalConnection")` handle — can receive
+// AS-side sends (Neopets DGS score/protocol path). Purely ADDITIVE: the normal
+// Ruffle routing below still runs, so genuine SWF↔SWF LocalConnections are
+// unaffected; dirplayer only acts on connection names it has registered. The
+// `dirplayer_`-prefixed global keeps us from colliding with stock Ruffle, and
+// `catch` means a page without dirplayer (missing global) is a silent no-op.
+use js_sys::JSON;
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_name = "dirplayer_localConnectionSend", catch)]
+    fn dirplayer_local_connection_send(
+        connection_name: String,
+        method_name: String,
+        args_json: String,
+    ) -> Result<(), JsValue>;
+}
+
 #[derive(Debug, Collect)]
 #[collect(require_static)]
 struct LocalConnectionData {
@@ -227,6 +248,26 @@ pub fn send<'gc>(
     let mut amf_arguments = Vec::with_capacity(args.len() - 2);
     for arg in &args[2..] {
         amf_arguments.push(serialize(activation, *arg));
+    }
+
+    // dirplayer fork: hand the send off to dirplayer as well (see extern above).
+    // Serialize the trailing args as a plain JSON array of their values.
+    {
+        let arr = js_sys::Array::new();
+        for arg in &args[2..] {
+            let ext_val = activation.store_and_convert_for_lingo(*arg);
+            let js_val = crate::avm1::object::external_to_js_value(ext_val);
+            arr.push(&js_val);
+        }
+        let args_json = JSON::stringify(&arr)
+            .ok()
+            .and_then(|s| s.as_string())
+            .unwrap_or_else(|| "[]".to_string());
+        let _ = dirplayer_local_connection_send(
+            connection_name.to_utf8_lossy().into_owned(),
+            method_name.to_utf8_lossy().into_owned(),
+            args_json,
+        );
     }
 
     activation.context.local_connections.send(
